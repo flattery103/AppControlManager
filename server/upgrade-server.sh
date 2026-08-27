@@ -77,8 +77,9 @@ if ! grep -q '^APPCONTROL_STALE_DEVICE_DAYS=' "$NEW_ENV"; then
   echo 'APPCONTROL_STALE_DEVICE_DAYS=30' | sudo tee -a "$NEW_ENV" >/dev/null
 fi
 
-sudo cp app.py requirements.txt "$NEW_BASE/"
+sudo cp app.py release_management.py requirements.txt "$NEW_BASE/"
 sudo install -m 0755 update-from-github.sh "$NEW_BASE/update-from-github.sh"
+sudo install -m 0755 import-agent-release.py "$NEW_BASE/import-agent-release.py"
 if [ ! -x "$NEW_BASE/venv/bin/python" ]; then
   sudo python3 -m venv "$NEW_BASE/venv"
 fi
@@ -111,5 +112,5 @@ sudo systemctl restart "$NEW_SERVICE"
 sudo systemctl --no-pager status "$NEW_SERVICE" || true
 
 echo
-echo "AppControl Manager server upgraded to 0.13.1 and restarted."
+echo "AppControl Manager server upgraded to 0.15.0 and restarted."
 echo "The legacy /opt/appguard-poc and /etc/appguard-poc.env files were left in place for rollback, but appguard-poc.service is disabled."

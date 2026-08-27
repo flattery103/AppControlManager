@@ -1,4 +1,35 @@
-# AppControl Manager 0.13.1
+# AppControl Manager 0.15.0
+
+## 0.15.0 integrated production-management milestone
+
+Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature release. It adds a signed GitHub release pipeline, browser-based server update management, automatic import of the matching managed-agent package after a server upgrade, and builds on the existing central application-policy engine with device, group, organization and global scopes. Long-lived reusable enrollment tokens remain unchanged.
+
+### GitHub release signing
+
+Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
+
+Configure these GitHub Actions repository secrets before creating a `v0.15.0` release tag:
+
+```text
+AZURE_CLIENT_ID
+AZURE_TENANT_ID
+AZURE_SUBSCRIPTION_ID
+AZURE_ARTIFACT_SIGNING_ENDPOINT
+AZURE_ARTIFACT_SIGNING_ACCOUNT
+AZURE_ARTIFACT_SIGNING_PROFILE
+```
+
+The Azure identity used by GitHub OIDC must be authorized to sign with the selected Artifact Signing certificate profile. If signing or signature verification fails, the release workflow stops before `gh release create`.
+
+### Server Updates
+
+Global administrators now have **Administration → Server Updates**. The page shows the installed server version, the latest GitHub Release, the six required source/agent/installer assets, release notes, matching-agent import state, and recent updater output. Installing a server update remains an explicit administrator action.
+
+After a successful server upgrade, `update-from-github.sh` verifies the source ZIP, managed-agent ZIP and installer SHA256 files and automatically imports the matching stable agent release into AppControl Manager. Existing deployment targeting can then roll that release out by device, device group, organization or global scope with rollout percentage controls.
+
+### Application policy scopes
+
+Application approvals and explicit blocks can create durable central policies for **this device**, the device's **group**, the **entire organization**, or **all organizations** (global administrators only). Signed applications prefer publisher/product identities so durable policies can cover application updates without relying only on one executable hash. BLOCK policies take precedence over ALLOW policies.
 
 
 ## 0.13.0 large-bundle approval fix

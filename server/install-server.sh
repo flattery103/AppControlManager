@@ -4,8 +4,9 @@ BASE=/opt/appcontrol-manager
 ENVFILE=/etc/appcontrol-manager.env
 SERVICE=appcontrol-manager
 sudo mkdir -p "$BASE" "$BASE/releases"
-sudo cp app.py requirements.txt "$BASE/"
+sudo cp app.py release_management.py requirements.txt "$BASE/"
 sudo install -m 0755 update-from-github.sh "$BASE/update-from-github.sh"
+sudo install -m 0755 import-agent-release.py "$BASE/import-agent-release.py"
 sudo python3 -m venv "$BASE/venv"
 sudo "$BASE/venv/bin/pip" install -r "$BASE/requirements.txt"
 if [ ! -f "$ENVFILE" ]; then

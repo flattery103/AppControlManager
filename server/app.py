@@ -11,6 +11,8 @@ import secrets
 import sqlite3
 import zipfile
 import shutil
+import shlex
+import subprocess
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -24,12 +26,14 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 import qrcode
 
+from release_management import GitHubReleaseInfo, fetch_latest_release
+
 DB_PATH = os.getenv("APPCONTROL_DB", os.getenv("APPGUARD_DB", "appcontrol-manager.db"))
 ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_ENROLLMENT_TOKEN", "CHANGE-ME"))
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.13.1")
+app = FastAPI(title="AppControl Manager Server", version="0.15.0")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -37,6 +41,12 @@ RELEASE_DIR = Path(os.getenv("APPCONTROL_RELEASE_DIR", "/opt/appcontrol-manager/
 SELF_UPDATE_MIN_VERSION = "0.10.0"
 OFFLINE_ATTENTION_DAYS = max(1, int(os.getenv("APPCONTROL_OFFLINE_ATTENTION_DAYS", "7")))
 STALE_DEVICE_DAYS = max(1, int(os.getenv("APPCONTROL_STALE_DEVICE_DAYS", "30")))
+GITHUB_REPO = os.getenv("APPCONTROL_GITHUB_REPO", "flattery103/AppControlManager").strip()
+GITHUB_API_BASE = os.getenv("APPCONTROL_GITHUB_API_BASE", f"https://api.github.com/repos/{GITHUB_REPO}").strip()
+GITHUB_TOKEN = os.getenv("APPCONTROL_GITHUB_TOKEN", "").strip()
+SERVER_UPDATE_SCRIPT = Path(os.getenv("APPCONTROL_UPDATE_SCRIPT", "/opt/appcontrol-manager/update-from-github.sh"))
+SERVER_UPDATE_LOG = Path(os.getenv("APPCONTROL_UPDATE_LOG", "/var/log/appcontrol-manager-update.log"))
+SERVER_UPDATE_UNIT = os.getenv("APPCONTROL_UPDATE_UNIT", "appcontrol-manager-update").strip() or "appcontrol-manager-update"
 
 
 def utcnow() -> str:
@@ -904,6 +914,79 @@ def version_at_least(current: Optional[str], minimum: str) -> bool:
         return False
 
 
+def server_update_asset_names(version: str) -> dict[str, str]:
+    version = str(version or '').strip()
+    return {
+        'source': f'AppControlManager-{version}-source.zip',
+        'source_sha256': f'AppControlManager-{version}-source.zip.sha256',
+        'agent': f'AppControlManager-Agent-{version}-win-x64.zip',
+        'agent_sha256': f'AppControlManager-Agent-{version}-win-x64.zip.sha256',
+        'installer': f'AppControlManager-Installer-{version}.exe',
+        'installer_sha256': f'AppControlManager-Installer-{version}.exe.sha256',
+    }
+
+
+def server_update_asset_status(info: GitHubReleaseInfo) -> dict[str, bool]:
+    return {key: name in info.assets for key, name in server_update_asset_names(info.version).items()}
+
+
+def _server_update_unit_active() -> bool:
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', '--quiet', f'{SERVER_UPDATE_UNIT}.service'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _server_update_log_tail(max_chars: int = 12000) -> str:
+    try:
+        if not SERVER_UPDATE_LOG.is_file():
+            return ''
+        return SERVER_UPDATE_LOG.read_text(encoding='utf-8', errors='replace')[-max_chars:]
+    except OSError as exc:
+        return f'Unable to read update log: {exc}'
+
+
+def _launch_server_update() -> str:
+    if _server_update_unit_active():
+        raise RuntimeError('A server update is already running.')
+    if not SERVER_UPDATE_SCRIPT.is_file():
+        raise RuntimeError(f'Server updater is not installed at {SERVER_UPDATE_SCRIPT}.')
+    try:
+        SERVER_UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with SERVER_UPDATE_LOG.open('a', encoding='utf-8') as handle:
+            handle.write(f"\n==== AppControl Manager update requested {utcnow()} ====\n")
+    except OSError as exc:
+        raise RuntimeError(f'Unable to prepare server update log: {exc}') from exc
+    command = (
+        f"exec {shlex.quote(str(SERVER_UPDATE_SCRIPT))} --install "
+        f">> {shlex.quote(str(SERVER_UPDATE_LOG))} 2>&1"
+    )
+    try:
+        result = subprocess.run(
+            [
+                'systemd-run', f'--unit={SERVER_UPDATE_UNIT}', '--collect', '--property=Type=oneshot',
+                '/bin/bash', '-lc', command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f'Unable to launch server updater: {exc}') from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        raise RuntimeError(f'Unable to launch server updater: {detail or "systemd-run failed"}')
+    return (result.stdout or '').strip()
+
+
 def release_for_deployment(conn: sqlite3.Connection, deployment: sqlite3.Row):
     if deployment['release_id']:
         return conn.execute("SELECT * FROM agent_releases WHERE id=? AND active=1 AND deleted_at IS NULL", (deployment['release_id'],)).fetchone()
@@ -1301,6 +1384,8 @@ def nav(principal: Optional[Principal] = None) -> str:
             ('/agent-updates','Agent Updates','⇧'),
             ('/users','User Management','♙'),
         ]
+        if principal.can_manage_global:
+            administration.append(('/server-updates','Server Updates','⬆'))
     return (
         "<aside class='sidebar'><a class='side-brand' href='/'><span class='brand-mark'>AC</span><span><b>AppControl Manager</b><small>Application Control</small></span></a>"
         "<div class='side-scroll'>"
@@ -1308,7 +1393,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.13.1</div></aside>"
+        + "</div><div class='side-footer'>Server 0.15.0</div></aside>"
     )
 
 
@@ -1706,7 +1791,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.13.1"}
+    return {"ok": True, "version": "0.15.0"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -2761,7 +2846,7 @@ def reports_center(principal:Principal=Depends(admin_auth)):
         ('audit','≡','Administrative Audit','Security-sensitive administrative and user actions for review and evidence.'),
     ]
     html=''.join(f"<a class='report-card' href='/reports/{slug}'><div class='report-icon'>{icon}</div><h3>{escape(title)}</h3><p>{escape(desc)}</p></a>" for slug,icon,title,desc in cards)
-    body=f"<div class='notice-info'><b>Reporting in 0.13.0:</b> reports can be filtered by period, organization and device, exported to CSV, or printed/saved as PDF directly from the browser.</div><div class='report-grid'>{html}</div>"
+    body=f"<div class='notice-info'><b>Reporting:</b> reports can be filtered by period, organization and device, exported to CSV, or printed/saved as PDF directly from the browser.</div><div class='report-grid'>{html}</div>"
     return page('Reports',body,principal,subtitle='Operational, security and compliance reporting for AppControl Manager.')
 
 
@@ -3513,6 +3598,102 @@ def deployment_scope_label(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
     if st=='device':
         d=conn.execute('SELECT hostname FROM devices WHERE id=?',(sid,)).fetchone(); return 'Device: '+(d['hostname'] if d else str(sid))
     return st
+
+
+@app.get('/server-updates', response_class=HTMLResponse)
+def server_updates_page(principal: Principal = Depends(admin_auth)):
+    if not principal.can_manage_global:
+        raise HTTPException(status_code=403, detail='Global administrator permission required.')
+    current = app.version
+    release = None
+    release_error = ''
+    try:
+        release = fetch_latest_release(GITHUB_REPO, token=GITHUB_TOKEN or None, api_base=GITHUB_API_BASE)
+    except Exception as exc:
+        release_error = str(exc)
+
+    active = _server_update_unit_active()
+    log_tail = _server_update_log_tail()
+    imported = False
+    matching_release_id = None
+    if release:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id FROM agent_releases WHERE version=? AND channel='stable' AND deleted_at IS NULL",
+                (release.version,),
+            ).fetchone()
+            if row:
+                imported = True
+                matching_release_id = row['id']
+
+    if release:
+        assets = server_update_asset_status(release)
+        all_assets = all(assets.values())
+        if version_key(release.version) > version_key(current):
+            status_text, status_badge = 'Update available', 'badge-warn'
+        elif version_key(release.version) == version_key(current):
+            status_text, status_badge = 'Up to date', 'badge-ok'
+        else:
+            status_text, status_badge = 'Local server is newer than GitHub latest', 'badge-info'
+        names = server_update_asset_names(release.version)
+        asset_rows = ''.join(
+            f"<tr><td>{escape(names[key])}</td><td><span class='badge {'badge-ok' if ok else 'badge-bad'}'>{'Available' if ok else 'Missing'}</span></td></tr>"
+            for key, ok in assets.items()
+        )
+        notes = escape(release.notes or 'No release notes were provided.')
+        release_link = f"<a href='{escape(release.html_url)}' target='_blank' rel='noopener'>Open GitHub Release</a>" if release.html_url else ''
+        imported_text = f"Imported as agent release #{matching_release_id}" if imported else 'Not imported yet; it will be imported automatically after a successful server update.'
+        install_disabled = ' disabled' if active or not all_assets or version_key(release.version) <= version_key(current) else ''
+        install_help = 'An update is already running.' if active else ('All six release assets are required before installation.' if not all_assets else 'The server restarts during installation. Refresh this page after about a minute.')
+        release_panel = f"""
+        <div class='grid'>
+          <div class='stat'><span class='stat-label'>Current Server</span><b>{escape(current)}</b><span class='trend'>Installed</span></div>
+          <div class='stat'><span class='stat-label'>Latest GitHub Release</span><b>{escape(release.version)}</b><span class='trend'>{escape(release.published_at or 'Publication time unavailable')}</span></div>
+          <div class='stat'><span class='stat-label'>Status</span><b style='font-size:18px'><span class='badge {status_badge}'>{status_text}</span></b><span class='trend'>{release_link}</span></div>
+          <div class='stat'><span class='stat-label'>Matching Agent</span><b style='font-size:18px'>{'Ready' if imported else 'Pending'}</b><span class='trend'>{escape(imported_text)}</span></div>
+        </div>
+        <div class='grid-2' style='margin-top:18px'>
+          <div class='panel'><h2 style='margin-top:0'>Release Assets</h2><div class='card'><table><thead><tr><th>Asset</th><th>Status</th></tr></thead><tbody>{asset_rows}</tbody></table></div></div>
+          <div class='panel'><h2 style='margin-top:0'>Release Notes</h2><div class='callout' style='white-space:pre-wrap'>{notes}</div></div>
+        </div>
+        <div class='panel'><h2 style='margin-top:0'>Install Server Update</h2><p class='muted'>{escape(install_help)}</p>
+          <form method='post' action='/admin/server-updates/install'><button class='btn-primary'{install_disabled}>Install {escape(release.version)}</button></form>
+        </div>
+        """
+    else:
+        release_panel = f"<div class='notice-warn'><b>Unable to check GitHub Releases.</b><br>{escape(release_error or 'Unknown GitHub error')}</div><div class='panel'><b>Repository:</b> {escape(GITHUB_REPO)}<br><span class='muted'>Confirm the repository has a published release and configure APPCONTROL_GITHUB_TOKEN if it is private.</span></div>"
+
+    log_panel = ''
+    if active or log_tail:
+        state = 'Update is running' if active else 'Last update output'
+        badge = 'badge-warn' if active else 'badge-info'
+        state_label = 'Running' if active else 'Idle'
+        log_panel = f"<div class='panel'><div class='section-head' style='margin-top:0'><h2>{state}</h2><span class='badge {badge}'>{state_label}</span></div><pre style='white-space:pre-wrap;max-height:420px;overflow:auto;background:#101828;color:#e5e7eb;padding:13px;border-radius:8px'>{escape(log_tail or 'Updater started. Waiting for output...')}</pre></div>"
+    return page(
+        'Server Updates',
+        release_panel + log_panel,
+        principal,
+        subtitle=f'GitHub release status for {GITHUB_REPO}. Server installation remains an explicit administrator action.',
+    )
+
+
+@app.post('/admin/server-updates/install')
+def install_server_update(principal: Principal = Depends(admin_auth)):
+    if not principal.can_manage_global:
+        raise HTTPException(status_code=403, detail='Global administrator permission required.')
+    try:
+        result = _launch_server_update()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    with db() as conn:
+        audit(
+            conn,
+            principal.username,
+            'server_update_started',
+            object_type='server_update',
+            detail=result or str(SERVER_UPDATE_SCRIPT),
+        )
+    return RedirectResponse('/server-updates', status_code=303)
 
 
 @app.get('/downloads/installer/latest')

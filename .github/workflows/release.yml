@@ -7,18 +7,19 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -29,9 +30,60 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Unable to determine release version from tag.' }
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Build Windows agent and installer
+      - name: Build Windows executables for signing
         shell: powershell
-        run: .\windows-agent\Build.ps1 -Version "$env:VERSION"
+        run: .\windows-agent\Build.ps1 -Version "$env:VERSION" -Stage Prepare
+
+      - name: Azure login for Artifact Signing
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign service and tray with Azure Artifact Signing
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\windows-agent\publish\Service\AppControlManager.Service.exe
+            ${{ github.workspace }}\windows-agent\publish\Tray\AppControlManager.Tray.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signed agent payload
+        shell: powershell
+        run: |
+          .\windows-agent\Verify-Signatures.ps1 -Files @(
+            "$env:GITHUB_WORKSPACE\windows-agent\publish\Service\AppControlManager.Service.exe",
+            "$env:GITHUB_WORKSPACE\windows-agent\publish\Tray\AppControlManager.Tray.exe"
+          )
+
+      - name: Package signed agent and build installer
+        shell: powershell
+        run: .\windows-agent\Build.ps1 -Version "$env:VERSION" -Stage Package -RequireSignedPayload
+
+      - name: Sign installer with Azure Artifact Signing
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\windows-agent\publish\Installer\AppControlManager-Installer-${{ env.VERSION }}.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signed installer and refresh checksum
+        shell: powershell
+        run: |
+          $installer = "$env:GITHUB_WORKSPACE\windows-agent\publish\Installer\AppControlManager-Installer-$env:VERSION.exe"
+          .\windows-agent\Verify-Signatures.ps1 -Files @($installer)
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash
+          "$hash  AppControlManager-Installer-$env:VERSION.exe" | Set-Content -LiteralPath "$installer.sha256" -Encoding ascii
 
       - name: Build source ZIP and checksums
         shell: powershell

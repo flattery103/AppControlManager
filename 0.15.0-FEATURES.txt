@@ -1,0 +1,13 @@
+AppControl Manager 0.15.0 - Integrated 0.13 through 0.15 milestone
+
+- Adds a signed GitHub release pipeline using Azure Artifact Signing for the Windows Service, Tray and final Installer.
+- Release publication fails if Authenticode signature verification fails.
+- Adds Administration > Server Updates for global administrators, including latest-version, required-asset, release-note and updater-status visibility.
+- Adds automatic agent release import after a successful GitHub-based server update.
+- The updater now requires and SHA256-verifies the source ZIP, managed-agent ZIP and installer before installation/import.
+- Retains existing managed deployments with device, group, organization and global targeting plus rollout percentages.
+- Retains and formalizes central ALLOW/BLOCK application policies across device, group, organization and global scopes.
+- Publisher/product application identities remain preferred where trustworthy signing metadata is available.
+- BLOCK policy precedence over ALLOW is unchanged.
+- Long-lived reusable enrollment tokens are unchanged.
+- Deep authorization/tenant-isolation audit and WDAC performance optimization are intentionally deferred to later pre-1.0 milestones.
