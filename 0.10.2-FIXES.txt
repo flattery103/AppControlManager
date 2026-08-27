@@ -1,0 +1,14 @@
+AppControl Manager 0.10.2
+
+Server fix:
+- Fixes HTTP 500 when submitting a grouped Request Access request. The grouped-request route
+  referenced component_as_approval() but the adapter function was missing from the server module.
+- Server upgrade is required before testing Request Access with the 0.10.2 agent.
+
+Windows agent fix:
+- Keeps the 0.10.1 behavior: unknown/unapproved and revoked applications can request access;
+  explicit AppControl Manager BLOCK policies remain silent.
+- Adds service-side tray recovery. About 30 seconds after service startup, and periodically afterward,
+  the service checks whether a logged-on user is missing AppControlManager.Tray.exe and attempts an
+  interactive relaunch through Task Scheduler. This repairs the case where managed self-update
+  successfully replaced the binaries but the old activation helper failed to relaunch the tray.

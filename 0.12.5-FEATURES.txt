@@ -1,0 +1,20 @@
+AppControl Manager 0.12.5
+=========================
+
+Enrollment token usability
+- Enrollment tokens are intentionally long-lived and reusable until disabled.
+- Newly created tokens are retained by the server so administrators can copy them again later.
+- Organizations now shows the full token with a Copy button for newly created tokens.
+- The token creation page includes Copy buttons for both the token and silent-install command.
+- Existing pre-0.12.5 hash-only tokens cannot be recovered; create a replacement token if reusable display/copy is needed.
+
+Windows tray UI
+- "Current Requests..." is renamed to "Request History...".
+- The old clickable "Status" popup is removed.
+- The third menu line is now a live informational status: Learning, Enforced, Offline, or Unknown.
+- Offline takes precedence when the tray cannot reach the AppControl Manager server through the local service.
+- Request history and the live status are refreshed on the existing five-second polling cycle.
+
+Windows agent
+- Agent version is 0.12.5 because the tray binary changes in this release.
+- WDAC policy generation/enforcement behavior is unchanged.

@@ -1,0 +1,15 @@
+AppControl Manager 0.12.3
+
+Blocked Activity and explicit-block history polish:
+- Blocked Events is now presented as Blocked Activity with summary metrics and filters
+- block telemetry is correlated with explicit AppControl Manager deny records
+- nearby approval requests are linked to block events so administrators can see what happened afterward
+- event details show block classification, related explicit block, related approval request, request status and decision message
+- explicit block inventory is searchable/filterable by status, scope, period, organization and application/device data
+- unblocked explicit deny records remain visible as historical records instead of disappearing from the management page
+- new explicit-block detail page shows rule metadata, source/related approval request and matching block events
+- blocked-event report/CSV now includes reason classification, explicit block ID, related request ID/status and decision message
+- retry and unblock operations now create explicit administrative audit records
+- no database schema migration required
+- no Windows agent update required; validated 0.11.1 endpoint remains current
+- WDAC enforcement, approval generation, request processing, updates and offboarding logic unchanged

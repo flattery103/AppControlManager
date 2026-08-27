@@ -1,0 +1,10 @@
+AppControl Manager 0.11.0
+
+- Dashboard attention now prioritizes pending/failed agent updates and only long-offline devices.
+- Configurable offline attention threshold (default 7 days).
+- Stale device filtering and permanent server-record deletion (default 30 days).
+- Server-driven endpoint uninstall/offboarding for agent 0.11.0+.
+- Offboarding removes AppControl Manager WDAC policies before removing the agent.
+- Failed WDAC cleanup aborts uninstall so a device is never intentionally left unmanaged under AppControl Manager enforcement.
+- Disabled agent releases can delete their stored ZIP/installer files safely.
+- Removed obsolete self-update bootstrap note from Agent Updates.

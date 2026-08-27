@@ -1,0 +1,12 @@
+AppControl Manager 0.10.1 - Windows agent behavior fix
+
+Server upgrade: NOT REQUIRED. AppControl Manager Server 0.10.0 is compatible.
+
+Behavior:
+- Explicit AppControl Manager BLOCK policies are silent on the endpoint and remain logged on the server.
+- Unknown/unapproved Windows App Control blocks open the normal grouped Request Access window.
+- Revoked approvals are requestable again and use the grouped request flow.
+- Existing pending/approving requests are reused rather than duplicated.
+- WerFault/WerFaultSecure helper noise remains suppressed from user-facing request windows.
+
+This source also includes the AgentUpdater.cs compile fix from the 0.10.0 build-fixed package.

@@ -1,0 +1,10 @@
+AppControl Manager 0.10.3
+
+Windows agent reliability fix:
+- Managed updates now recover the tray immediately after the replacement service starts.
+- Tray recovery retries during the first minute after service startup, then periodically.
+- Interactive-user detection now uses Explorer sessions first, which works for RDP/remote sessions where Win32_ComputerSystem.UserName can be empty.
+- The update helper records whether the tray was restarted or deferred.
+- Recovery no longer treats a helper exit-code 0 as success unless AppControlManager.Tray.exe is actually running.
+
+No server changes are required. AppControl Manager Server 0.10.2 can deploy this agent release.

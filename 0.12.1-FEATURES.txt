@@ -1,0 +1,13 @@
+AppControl Manager 0.12.1
+
+Denial-message workflow update:
+- administrator denial page for pending application requests
+- optional end-user denial message, up to 1000 characters
+- blank denial message falls back to "Denied by administrator."
+- denial message stored in approval_requests.decision_note
+- no database schema migration required
+- existing Windows agent 0.11.1 displays the decision note; no endpoint update required
+- request detail/history show the saved decision message
+- Approval Decisions report/CSV separates Request Reason and Decision Message
+- administrative audit records include the denial message
+- existing approval, block, WDAC, update and offboarding behavior remains unchanged

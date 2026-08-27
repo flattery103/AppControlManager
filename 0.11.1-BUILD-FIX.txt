@@ -1,0 +1,6 @@
+AppControl Manager 0.11.1 Windows build fix
+
+Fixes CS0136 compile errors in LocalRequestServer.cs introduced by the endpoint-user device-block feature.
+The block_session branch now uses unique local variable names (blockOriginalPath, blockSourcePath, blockMeta) so they do not collide with variables used later in the request handler.
+
+No server changes are required. Product/agent version remains 0.11.1.

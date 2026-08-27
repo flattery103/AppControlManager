@@ -1,0 +1,34 @@
+name: Build AppControl Manager Windows Agent
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Agent/installer version to build'
+        required: true
+        default: '0.13.1'
+  push:
+    paths:
+      - 'windows-agent/**'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build self-contained x64 agent, update package and installer
+        shell: powershell
+        run: .\windows-agent\Build.ps1 -Version "${{ github.event.inputs.version || '0.13.1' }}"
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppControlManager-${{ github.event.inputs.version || '0.13.1' }}-Windows-x64
+          path: |
+            windows-agent/publish/**
+            windows-agent/scripts/**
+            windows-agent/Install-Agent.ps1
+            windows-agent/Upgrade-Agent.ps1
+            windows-agent/Uninstall-Agent.ps1

@@ -1,0 +1,15 @@
+AppControl Manager 0.11.1
+=========================
+
+Endpoint user device-only blocks
+--------------------------------
+- The unknown/unapproved Application Blocked window now includes **Block on This Device**.
+- Endpoint users may create an explicit deny only for their own enrolled device.
+- User-created blocks never create group, organization, or global policies.
+- Future attempts matching that explicit block are silent on the endpoint and remain logged on the server.
+- The Explicit Blocks page records the Windows user that initiated the block.
+- Administrators can remove a user-created device block with the existing Unblock Device action.
+- Optional text entered in Reason is retained as the user's block note.
+
+Server and Windows agent 0.11.1 are both required for this feature.
+Remote uninstall/offboarding remains supported by agent 0.11.0 and later.

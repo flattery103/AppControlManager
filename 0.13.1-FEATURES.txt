@@ -1,0 +1,12 @@
+AppControl Manager 0.13.1 - GitHub release/server update integration
+
+- Adds server/update-from-github.sh for direct server-side update checks and installs from GitHub Releases.
+- Defaults to https://github.com/flattery103/AppControlManager and supports overriding APPCONTROL_GITHUB_REPO.
+- Supports an optional APPCONTROL_GITHUB_TOKEN if the repository is later made private.
+- Downloads the source ZIP and SHA256 directly from the latest GitHub Release.
+- Verifies SHA256 before extraction or execution.
+- Uses the packaged upgrade-server.sh, preserving the existing database-backup/migration behavior.
+- Verifies the installed version through the local /health endpoint after upgrade.
+- Adds .github/workflows/release.yml. Pushing a vX.Y.Z tag builds the Windows agent/installer, builds the source ZIP/checksum, and publishes all artifacts as a GitHub Release.
+- Long-lived reusable enrollment tokens are unchanged.
+- WDAC policy behavior and the 0.13.0 command-channel hardening are unchanged.

@@ -1,0 +1,16 @@
+AppControl Manager 0.12.0
+
+Management/UI polish + reporting release:
+- persistent grouped sidebar navigation
+- global management-console search
+- operational dashboard redesign
+- device summary metrics, pagination and bulk mode/group actions
+- improved device detail console
+- searchable/paginated Approved Applications and Application Policies
+- redesigned Agent Updates management experience
+- Reports center with Executive, Application Activity, Blocked Event Detail,
+  Device Compliance, Approval Decisions, Policy Inventory, Agent Update,
+  Command History and Administrative Audit reports
+- period/org/device report filters
+- CSV exports and browser Print/Save-as-PDF output
+- Windows agent remains 0.11.1; no endpoint update required

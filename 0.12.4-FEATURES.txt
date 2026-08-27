@@ -1,0 +1,16 @@
+AppControl Manager 0.12.4
+
+Dashboard and operations-reporting polish:
+- new Operations Review report consolidates pending approvals, approval failures, failed/stalled endpoint commands, update issues, offline devices and explicit-block failures
+- Operations Review supports existing report scope controls plus CSV export and Print / Save PDF
+- dashboard adds Items Needing Review with approval, command, block, update and offline signals
+- dashboard adds Recent Approval Decisions with status, administrator and decision message
+- dashboard links directly to Operations Review alongside Executive Report
+- request-center failure handling now recognizes the actual approval_failed backend status as Failed
+- Failed request filtering matches both legacy failed and current approval_failed values
+- Approval Decisions reporting includes approval_failed in Failed totals
+- Executive Summary now counts approved_existing as approved and explicit blocked request outcomes with denied/rejected decisions
+- Reports center includes Operations Review
+- no database schema migration required
+- no Windows agent update required; validated endpoint agent remains unchanged
+- WDAC enforcement, approval generation, blocking, updates and offboarding behavior unchanged

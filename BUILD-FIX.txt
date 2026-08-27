@@ -1,0 +1,6 @@
+AppControl Manager 0.10.0 build-fixed source
+
+Fixes Windows agent compile error CS0201 in AgentUpdater.cs by replacing the invalid
+standalone null-coalescing throw expression after Process.Start() with an explicit
+null check. Product/server/agent version remains 0.10.0 so the documented managed
+self-update test can still use Build.ps1 -Version 0.10.1.

@@ -1,0 +1,11 @@
+AppControl Manager 0.13.0 - Command channel hardening
+
+- Long-lived reusable enrollment tokens are unchanged.
+- Validates pending server-to-agent commands before dispatch.
+- Rejects malformed/unknown commands and records the failure in command/audit history.
+- Issues a fresh opaque command claim for each dispatch; only its SHA256 hash is stored server-side.
+- 0.13+ agents must return the current claim to complete a command.
+- Recovered/requeued commands invalidate the old claim.
+- Agent keeps up to 100 local successful-command receipts and suppresses duplicate WDAC mutation execution after a service/network interruption.
+- Command History and command reports include an Attempts count.
+- Existing 0.12.x agents remain compatible while endpoints are upgraded; claim enforcement activates once an endpoint reports 0.13.0 or newer.

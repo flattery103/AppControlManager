@@ -1,0 +1,14 @@
+AppControl Manager 0.12.2
+
+Approval Request Center polish:
+- request summary cards for Pending, Approving, Approved, Denied / Blocked and Failed
+- expanded search across app, file, device, requester, decision message and decision-maker
+- filters for status, request type, period and organization (global administrators)
+- queue-first, newest-first and oldest-first sorting
+- request state labels now include Blocked and Approved (existing policy)
+- request list shows decision administrator/time/message plus request age/time-to-decision
+- request details show structured request/decision metadata and component count
+- Approval Decisions report counts approved_existing as an approved outcome and uses friendly status labels
+- no database schema migration required
+- no Windows agent update required; validated 0.11.1 endpoint remains current
+- WDAC enforcement, approvals, blocks, updates and offboarding logic unchanged

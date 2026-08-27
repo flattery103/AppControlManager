@@ -1,0 +1,22 @@
+AppControl Manager 0.12.6
+=========================
+
+Large application-bundle approval fix
+-------------------------------------
+- Fixed approvals that failed on applications with a large number of same-publisher components with:
+  "An error occurred trying to start process 'powershell.exe' ... The filename or extension is too long."
+- AppControl Manager no longer passes the full generated application-bundle file list in the
+  powershell.exe process command line.
+- The service now writes the expanded file list to a temporary JSON data file and passes only that
+  short list-file path to the existing supplemental-policy PowerShell helper.
+- This removes the Windows CreateProcess command-line-size bottleneck while preserving all of the
+  existing application-bundle expansion and WDAC policy-generation behavior.
+- Temporary list files are deleted after completion, including after failures.
+
+Scope
+-----
+- Windows agent/service update only for the functional fix.
+- Server version/package metadata is advanced to 0.12.6 for release consistency.
+- No database schema change.
+- No enrollment-token behavior change.
+- No tray-menu behavior change from 0.12.5.
