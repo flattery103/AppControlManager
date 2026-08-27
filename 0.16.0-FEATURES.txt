@@ -1,0 +1,17 @@
+AppControl Manager 0.16.0
+
+Upgrade / release compatibility
+- Fixes the New-SupplementalForFiles.ps1 $Json/$json variable collision.
+- Uses an explicit [string[]] conversion for file-list JSON so Windows PowerShell 5.1 preserves multiple paths correctly.
+- Prevents CRLF shell-script packaging failures by forcing *.sh files to LF through .gitattributes and disabling core.autocrlf for GitHub source archive generation.
+- The Linux GitHub updater also normalizes extracted shell scripts before executing upgrade-server.sh.
+- The GitHub release job runs in the release environment for Artifact Signing OIDC.
+
+WDAC approval performance, first pass
+- Deduplicated application-root scans prevent repeated traversal when several requested components belong to the same signed application tree.
+- An in-memory signer cache reuses certificate publisher lookups for unchanged files. Cache validity is keyed by full path, file size and LastWriteTimeUtc; changed files are re-read automatically.
+- Existing bundle limits remain 4 directory levels and 750 executable files per application root.
+- Bundle discovery now records files examined, signer reads, signer cache hits, scanned roots, skipped duplicate roots and scan duration.
+- Approval progress distinguishes application discovery from Windows App Control policy generation/install.
+
+This release intentionally does not redesign New-CIPolicyRule or supplemental-policy generation. The collected timings are intended to guide the next 0.16.x performance round.

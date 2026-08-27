@@ -15,8 +15,8 @@ if (!$state.base_policy_id) { throw 'Base policy has not been created.' }
 $inputPaths=@()
 if(-not [string]::IsNullOrWhiteSpace($FileListPath)) {
     if(-not (Test-Path -LiteralPath $FileListPath -PathType Leaf)) { throw "Policy file-list input does not exist: $FileListPath" }
-    $json=Get-Content -LiteralPath $FileListPath -Raw -Encoding UTF8
-    if(-not [string]::IsNullOrWhiteSpace($json)) { $inputPaths=@($json | ConvertFrom-Json) }
+    $fileListJson=Get-Content -LiteralPath $FileListPath -Raw -Encoding UTF8
+    if(-not [string]::IsNullOrWhiteSpace($fileListJson)) { $inputPaths=[string[]](ConvertFrom-Json -InputObject $fileListJson) }
 } elseif($null -ne $FilePath) {
     $inputPaths=@($FilePath)
 }

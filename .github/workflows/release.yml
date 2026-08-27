@@ -91,7 +91,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path release -Force | Out-Null
           $source = "release/AppControlManager-$env:VERSION-source.zip"
-          git archive --format=zip --prefix="AppControlManager-$env:VERSION/" -o $source HEAD
+          git -c core.autocrlf=false archive --format=zip --prefix="AppControlManager-$env:VERSION/" -o $source HEAD
           if ($LASTEXITCODE -ne 0) { throw 'git archive failed.' }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant()
           "$hash  AppControlManager-$env:VERSION-source.zip" | Set-Content -LiteralPath "$source.sha256" -Encoding ascii

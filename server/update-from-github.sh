@@ -213,6 +213,9 @@ curl "${asset_args[@]}" "$INSTALLER_SHA_URL" -o "$INSTALLER_SHA"
 
 echo "Extracting AppControl Manager ${LATEST}..."
 unzip -q "$ZIP" -d "$TMP/extracted"
+# GitHub source archives are built on a Windows runner. Normalize shell scripts defensively
+# before executing them so an accidental CRLF checkout/archive cannot break Linux shebangs.
+find "$TMP/extracted" -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 SERVER_DIR="$TMP/extracted/AppControlManager-${LATEST}/server"
 if [ ! -f "$SERVER_DIR/upgrade-server.sh" ]; then
   echo "Release package is missing server/upgrade-server.sh." >&2

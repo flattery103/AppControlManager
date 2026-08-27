@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text;
@@ -9,6 +10,8 @@ public sealed class PolicyHelper
 {
     private readonly FileLogger _log;
     private readonly PolicyProgressTracker _progress;
+    private readonly ConcurrentDictionary<string, PublisherCacheEntry> _publisherCache = new(StringComparer.OrdinalIgnoreCase);
+    private const int PublisherCacheLimit = 5000;
     public PolicyHelper(FileLogger log, PolicyProgressTracker progress)
     {
         _log = log;
@@ -28,13 +31,12 @@ public sealed class PolicyHelper
         // Discover protected-install application bundles in the C# service. This deliberately
         // uses the same PE certificate reader as normal AppGuard metadata collection, avoiding
         // differences we observed between service metadata and PowerShell Get-AuthenticodeSignature.
-        var files = ExpandProtectedApplicationBundles(requested);
+        var expansion = ExpandProtectedApplicationBundles(requested);
+        var files = expansion.Files;
         var expanded = Math.Max(files.Length - requested.Length, 0);
-        if (expanded > 0)
-            _log.Write($"bundle-scan requested={requested.Length} policyFiles={files.Length} expanded={expanded} primary={requested[0]}");
-        else
-            _log.Write($"bundle-scan no-expansion requested={requested.Length} primary={requested[0]}");
+        _log.Write($"bundle-scan summary requested={requested.Length} policyFiles={files.Length} expanded={expanded} roots={expansion.RootScans} duplicateRootsSkipped={expansion.DuplicateScansSkipped} filesExamined={expansion.FilesExamined} signerReads={expansion.SignerReads} cacheHits={expansion.CacheHits} scanElapsed={expansion.ScanElapsed.TotalSeconds:F2}s primary={requested[0]}");
 
+        _progress.Update(requestId, "scanning", $"Application scan complete: examined {expansion.FilesExamined} executable file(s) across {expansion.RootScans} application root(s) in {expansion.ScanElapsed.TotalSeconds:F1}s; signer cache hits: {expansion.CacheHits}.", files.Length);
         _progress.Update(requestId, "building", $"Building and installing the Windows App Control policy for {files.Length} file(s)...", files.Length);
         var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "New-SupplementalForFiles.ps1");
 
@@ -74,15 +76,26 @@ public sealed class PolicyHelper
         return result;
     }
 
-    private string[] ExpandProtectedApplicationBundles(IReadOnlyList<string> requested)
+    private BundleExpansionResult ExpandProtectedApplicationBundles(IReadOnlyList<string> requested)
     {
-        var output = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stopwatch = Stopwatch.StartNew();
+        var output = new HashSet<string>(requested, StringComparer.OrdinalIgnoreCase);
+        var scanKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scanTargets = new List<BundleScanTarget>();
+        var filesExamined = 0;
+        var signerReads = 0;
+        var cacheHits = 0;
+        var duplicateScansSkipped = 0;
+        var rootScans = 0;
+
+        // Resolve each requested component to an application root and publisher first. Multiple
+        // components from the same signed application can otherwise trigger the same directory
+        // walk repeatedly during a single approval session.
         foreach (var file in requested)
         {
-            output.Add(file);
             if (!IsProtectedProgramFilesPath(file)) continue;
 
-            var primaryPublisher = ReadPublisherOnly(file);
+            var primaryPublisher = GetPublisherCached(file, ref signerReads, ref cacheHits);
             if (string.IsNullOrWhiteSpace(primaryPublisher)) continue;
 
             var root = Path.GetDirectoryName(file);
@@ -94,18 +107,102 @@ public sealed class PolicyHelper
                 if (!string.IsNullOrWhiteSpace(parent) && IsProtectedProgramFilesPath(parent)) root = parent;
             }
 
-            var matched = 0;
-            foreach (var candidate in EnumerateExecutableFiles(root, maxDepth: 4, maxFiles: 750))
+            root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var normalizedPublisher = NormalizePublisher(primaryPublisher);
+            var scanKey = root + "|" + normalizedPublisher;
+            if (!scanKeys.Add(scanKey))
             {
-                var publisher = ReadPublisherOnly(candidate);
+                duplicateScansSkipped++;
+                continue;
+            }
+            scanTargets.Add(new BundleScanTarget(root, primaryPublisher, normalizedPublisher, file));
+        }
+
+        // Parent application roots cover their child directories. Process shorter roots first so
+        // a request containing both an EXE and DLL from the same tree performs one scan, not one
+        // scan per component/subdirectory.
+        var coveredRoots = new List<(string Root, string Publisher)>();
+        foreach (var target in scanTargets.OrderBy(x => x.Root.Length).ThenBy(x => x.Root, StringComparer.OrdinalIgnoreCase))
+        {
+            if (coveredRoots.Any(x => PublisherEquals(x.Publisher, target.Publisher) && IsSameOrDescendantRoot(target.Root, x.Root)))
+            {
+                duplicateScansSkipped++;
+                _log.Write($"bundle-scan skip-covered root={target.Root} publisher={target.Publisher} primary={target.PrimaryFile}");
+                continue;
+            }
+
+            var matched = 0;
+            rootScans++;
+            foreach (var candidate in EnumerateExecutableFiles(target.Root, maxDepth: 4, maxFiles: 750))
+            {
+                filesExamined++;
+                var publisher = GetPublisherCached(candidate, ref signerReads, ref cacheHits);
                 if (string.IsNullOrWhiteSpace(publisher)) continue;
-                if (!PublisherEquals(primaryPublisher, publisher)) continue;
+                if (!PublisherEquals(target.Publisher, publisher)) continue;
                 if (output.Add(candidate)) matched++;
             }
-            _log.Write($"bundle-scan root={root} publisher={primaryPublisher} matched={matched} primary={file}");
+            coveredRoots.Add((target.Root, target.NormalizedPublisher));
+            _log.Write($"bundle-scan root={target.Root} publisher={target.Publisher} matched={matched} primary={target.PrimaryFile}");
         }
-        return output.ToArray();
+
+        stopwatch.Stop();
+        var scanElapsed = stopwatch.Elapsed;
+        return new BundleExpansionResult(output.ToArray(), filesExamined, signerReads, cacheHits, rootScans, duplicateScansSkipped, scanElapsed);
     }
+
+    private string? GetPublisherCached(string file, ref int signerReads, ref int cacheHits)
+    {
+        string fullPath;
+        FileInfo info;
+        try
+        {
+            fullPath = Path.GetFullPath(file);
+            info = new FileInfo(fullPath);
+            if (!info.Exists) return null;
+        }
+        catch
+        {
+            return null;
+        }
+
+        var size = info.Length;
+        var lastWriteUtcTicks = info.LastWriteTimeUtc.Ticks;
+        if (_publisherCache.TryGetValue(fullPath, out var cached) &&
+            cached.Size == size && cached.LastWriteUtcTicks == lastWriteUtcTicks)
+        {
+            cacheHits++;
+            return cached.Publisher;
+        }
+
+        signerReads++;
+        var publisher = ReadPublisherOnly(fullPath);
+        _publisherCache[fullPath] = new PublisherCacheEntry(size, lastWriteUtcTicks, publisher);
+
+        // Keep this strictly an optimization cache, not durable state. Clearing it at a generous
+        // bound is cheap and avoids unbounded growth on endpoints that process many installers.
+        if (_publisherCache.Count > PublisherCacheLimit)
+            _publisherCache.Clear();
+
+        return publisher;
+    }
+
+    private static bool IsSameOrDescendantRoot(string candidate, string ancestor)
+    {
+        if (candidate.Equals(ancestor, StringComparison.OrdinalIgnoreCase)) return true;
+        return candidate.StartsWith(ancestor + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+               candidate.StartsWith(ancestor + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record PublisherCacheEntry(long Size, long LastWriteUtcTicks, string? Publisher);
+    private sealed record BundleScanTarget(string Root, string Publisher, string NormalizedPublisher, string PrimaryFile);
+    private sealed record BundleExpansionResult(
+        string[] Files,
+        int FilesExamined,
+        int SignerReads,
+        int CacheHits,
+        int RootScans,
+        int DuplicateScansSkipped,
+        TimeSpan ScanElapsed);
 
     private static bool IsProtectedProgramFilesPath(string path)
     {
