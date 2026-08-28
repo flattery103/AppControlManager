@@ -1,4 +1,9 @@
-# AppControl Manager 0.16.3
+# AppControl Manager 0.16.4
+
+
+## 0.16.4 ConfigCI rule-fragment binding fix
+
+Version 0.16.4 is a bounded reliability fix for the 0.16.3 Path B architecture. `New-RuleFragment.ps1` now flattens the rule collection returned by `New-CIPolicyRule` before passing it to `New-CIPolicy -Rules`, preventing the `Microsoft.SecureBoot.UserConfig.Rule` ParameterBindingException seen during learning precomputation and background bundle generation. The primary approval, background bundle, and learning precomputation architecture is otherwise unchanged.
 
 ## 0.16.3 fast-primary approval and background coverage milestone
 
@@ -6,7 +11,7 @@ Version 0.16.3 changes the approval architecture so a foreground approval instal
 
 The server also adds a global **Settings → Display timezone** option using IANA timezone identifiers. Database and agent/API timestamps remain UTC, while human-facing server timestamps are rendered cleanly in the configured DST-aware timezone.
 
-**Rollback/reference baseline:** retain AppControl Manager **0.16.2** as the known rollback baseline for this architecture branch. If the 0.16.3 primary approval/background bundle model performs poorly or produces unacceptable authorization/revocation behavior, stop rollout and return development to the retained 0.16.2 source rather than layering more architectural changes on top.
+**Rollback/reference baseline:** retain AppControl Manager **0.16.2** as the known rollback baseline for this architecture branch. If the 0.16.3/0.16.4 primary approval/background bundle model performs poorly or produces unacceptable authorization/revocation behavior, stop rollout and return development to the retained 0.16.2 source rather than layering more architectural changes on top.
 
 ## 0.16.2 learned-baseline rule-generation optimization
 
@@ -26,7 +31,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.3`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.4`:
 
 ```text
 AZURE_CLIENT_ID

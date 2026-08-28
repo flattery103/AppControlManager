@@ -10,8 +10,9 @@ Assert-Administrator
 $resolved=Resolve-CIFilePath $FilePath
 if(-not (Test-Path -LiteralPath $resolved -PathType Leaf)){ throw "Rule-fragment source file does not exist: $FilePath" }
 $timer=[Diagnostics.Stopwatch]::StartNew()
-if($Kind -eq 'product') { $rules=@(New-CIPolicyRule -Level FilePublisher -SpecificFileNameLevel ProductName -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved) }
-else { $rules=@(New-CIPolicyRule -Level Hash -DriverFilePath $resolved) }
+$rules=@()
+if($Kind -eq 'product') { $rules += New-CIPolicyRule -Level FilePublisher -SpecificFileNameLevel ProductName -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved }
+else { $rules += New-CIPolicyRule -Level Hash -DriverFilePath $resolved }
 if($rules.Count -eq 0){ throw "No $Kind rule could be generated for $resolved" }
 $dir=Split-Path -Parent $OutputPath
 if(-not [string]::IsNullOrWhiteSpace($dir)){ New-Item -ItemType Directory -Path $dir -Force | Out-Null }

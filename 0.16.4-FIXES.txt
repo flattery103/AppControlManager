@@ -1,0 +1,10 @@
+AppControl Manager 0.16.4
+=========================
+
+ConfigCI rule-fragment binding fix
+-----------------------------------
+
+- Fixed New-RuleFragment.ps1 so the rule collection returned by New-CIPolicyRule is flattened into individual Microsoft.SecureBoot.UserConfig.Rule objects before being passed to New-CIPolicy -Rules.
+- The 0.16.3 implementation wrapped the returned collection in a nested array, which caused a ParameterBindingException during both hash and ProductName FilePublisher background fragment generation.
+- This is a bounded fix only. The 0.16.3 primary approval, background bundle, and learning precomputation architecture remains unchanged.
+- Keep AppControl Manager 0.16.2 as the rollback/reference baseline for the Path B architecture. If 0.16.4 still shows unacceptable authorization, revocation, or background-processing behavior, stop rollout and return development to the retained 0.16.2 baseline rather than layering additional architectural work on top.

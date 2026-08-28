@@ -7,7 +7,7 @@ namespace AppGuard.Service;
 
 public sealed class AgentWorker : BackgroundService
 {
-    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.3";
+    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.4";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;
