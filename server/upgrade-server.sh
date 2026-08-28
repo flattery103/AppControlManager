@@ -112,5 +112,5 @@ sudo systemctl restart "$NEW_SERVICE"
 sudo systemctl --no-pager status "$NEW_SERVICE" || true
 
 echo
-echo "AppControl Manager server upgraded to 0.16.2 and restarted."
+echo "AppControl Manager server upgraded to 0.16.3 and restarted."
 echo "The legacy /opt/appguard-poc and /etc/appguard-poc.env files were left in place for rollback, but appguard-poc.service is disabled."

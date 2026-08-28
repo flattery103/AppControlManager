@@ -14,5 +14,8 @@ public static class AppGuardPaths
     public static string UpdateDirectory => Path.Combine(ProgramDataRoot, "Updates");
     public static string UpdateStatusPath => Path.Combine(UpdateDirectory, "update-status.json");
     public static string UpdateCurrentPath => Path.Combine(UpdateDirectory, "current-update.json");
+    public static string BackgroundPolicyQueuePath => Path.Combine(ProgramDataRoot, "background-policy-state.json");
+    public static string RuleFragmentDirectory => Path.Combine(ProgramDataRoot, "RuleFragments");
+    public static string LearnedApplicationsPath => Path.Combine(ProgramDataRoot, "learned.json");
     public const string PipeName = "AppControlManager.Requests";
 }

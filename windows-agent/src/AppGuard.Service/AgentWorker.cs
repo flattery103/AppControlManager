@@ -7,20 +7,22 @@ namespace AppGuard.Service;
 
 public sealed class AgentWorker : BackgroundService
 {
-    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.2";
+    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.3";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;
     private readonly PolicyHelper _policies;
     private readonly AgentUpdater _updater;
     private readonly LocalRequestServer _pipe;
+    private readonly BackgroundPolicyProcessor _backgroundPolicy;
+    private readonly BackgroundPolicyStore _backgroundPolicyStore;
     private readonly FileLogger _log;
     private readonly CommandReceiptStore _receipts = new();
     private int _loop;
 
-    public AgentWorker(JsonFileStore store, ApiClient api, EventCollector events, PolicyHelper policies, AgentUpdater updater, LocalRequestServer pipe, FileLogger log)
+    public AgentWorker(JsonFileStore store, ApiClient api, EventCollector events, PolicyHelper policies, AgentUpdater updater, LocalRequestServer pipe, BackgroundPolicyProcessor backgroundPolicy, BackgroundPolicyStore backgroundPolicyStore, FileLogger log)
     {
-        _store = store; _api = api; _events = events; _policies = policies; _updater = updater; _pipe = pipe; _log = log;
+        _store = store; _api = api; _events = events; _policies = policies; _updater = updater; _pipe = pipe; _backgroundPolicy = backgroundPolicy; _backgroundPolicyStore = backgroundPolicyStore; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,9 +31,10 @@ public sealed class AgentWorker : BackgroundService
         var pipeTask = _pipe.RunAsync(stoppingToken);
         var maintenanceTask = RunMaintenanceLoopAsync(stoppingToken);
         var commandTask = RunCommandLoopAsync(stoppingToken);
+        var backgroundPolicyTask = RunBackgroundPolicyLoopAsync(stoppingToken);
         try
         {
-            await Task.WhenAll(maintenanceTask, commandTask, pipeTask);
+            await Task.WhenAll(maintenanceTask, commandTask, backgroundPolicyTask, pipeTask);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         _log.Write("agent-stop");
@@ -67,10 +70,23 @@ public sealed class AgentWorker : BackgroundService
         }
     }
 
+    private async Task RunBackgroundPolicyLoopAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var worked = false;
+            try { worked = await _backgroundPolicy.ProcessOneAsync(stoppingToken); }
+            catch (Exception ex) { _log.Write("background-policy: " + ex.Message); }
+            try { await Task.Delay(TimeSpan.FromSeconds(worked ? 5 : 15), stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+        }
+    }
+
     private async Task HeartbeatAsync(CancellationToken ct)
     {
         var mode = PolicyInspector.GetMode();
         var update = _updater.GetHeartbeatStatus(Version);
+        var background = _backgroundPolicy.QueueStatus();
         await _api.HeartbeatAsync(new HeartbeatRequest
         {
             LearningMode = mode == "learning",
@@ -79,7 +95,10 @@ public sealed class AgentWorker : BackgroundService
             AgentVersion = Version,
             OsVersion = Environment.OSVersion.Version.ToString(),
             UpdateStatus = update.Status,
-            UpdateResult = update.Result
+            UpdateResult = update.Result,
+            BackgroundPolicyStatus = background.Status,
+            BackgroundPolicyPending = background.Pending,
+            BackgroundPolicyFailed = background.Failed
         }, ct);
         try { await _updater.CleanupPreviousTrustAsync(Version, ct); } catch (Exception ex) { _log.Write("agent-update cleanup: " + ex.Message); }
         if (_loop == 1 || _loop % 20 == 0) _log.Write("heartbeat OK mode=" + mode + (string.IsNullOrWhiteSpace(update.Status) ? "" : " update=" + update.Status));
@@ -140,6 +159,16 @@ public sealed class AgentWorker : BackgroundService
             maxRecord = chunk.Max(x => x.RecordId ?? maxRecord);
             _store.UpdateState(s => s.LastRecordId = maxRecord);
             uploaded += chunk.Length;
+
+            if (PolicyInspector.GetMode().Equals("learning", StringComparison.OrdinalIgnoreCase))
+            {
+                var learned = chunk.Where(x => x.EventId == 3076).ToArray();
+                if (learned.Length > 0)
+                {
+                    var stats = _backgroundPolicyStore.PrepareLearningEvents(learned);
+                    _log.Write($"learning-prep observed={stats.Observed} productCandidates={stats.ProductCandidates} hashCandidates={stats.HashCandidates} reused={stats.Reused} queued={stats.Queued} unpreparable={stats.Unpreparable}");
+                }
+            }
         }
         _log.Write($"events uploaded count={uploaded} last_record={maxRecord}");
     }
@@ -170,13 +199,15 @@ public sealed class AgentWorker : BackgroundService
                         var file = PayloadString(command, "file_path");
                         var policySource = PayloadString(command, "policy_source_path");
                         var requestId = PayloadLong(command, "request_id");
+                        var scopedPolicyIdValue = PayloadLong(command, "scoped_policy_id");
+                        long? scopedPolicyId = scopedPolicyIdValue > 0 ? scopedPolicyIdValue : null;
                         if (string.IsNullOrWhiteSpace(file)) throw new InvalidOperationException("Approved file path was empty.");
                         // Prefer the live installed path whenever it still exists. Protected-install bundle
                         // expansion depends on the real Program Files location. The preserved BlockedCache
                         // copy is only a fallback for transient files that have already disappeared.
                         var source = File.Exists(file) ? file : (!string.IsNullOrWhiteSpace(policySource) && File.Exists(policySource) ? policySource : file);
                         if (!File.Exists(source)) throw new FileNotFoundException("Approved file and its preserved approval copy no longer exist.", source);
-                        var result = await _policies.ApproveFileAsync(source, requestId, ct);
+                        var result = await _policies.ApproveFileAsync(source, requestId, scopedPolicyId, ct);
                         complete.Success = true;
                         complete.Result = result.ExpandedFiles > 0
                             ? $"Supplemental policy {result.PolicyId} installed for {file}. AppControl Manager also pre-authorized {result.ExpandedFiles} same-publisher component(s) from the protected application directory."
@@ -188,10 +219,13 @@ public sealed class AgentWorker : BackgroundService
                         complete.Publisher = result.Publisher;
                         complete.ProductName = result.ProductName;
                         complete.FileVersion = result.FileVersion;
+                        complete.BackgroundQueued = result.BackgroundQueued;
                         _log.Write($"command {command.Id} policy installed id={result.PolicyId} rule={result.RuleType} file={file} policyFiles={result.PolicyFiles} expanded={result.ExpandedFiles}");
                         break;
                     case "approve_session":
                         var sessionRequestId = PayloadLong(command, "request_id");
+                        var sessionScopedPolicyIdValue = PayloadLong(command, "scoped_policy_id");
+                        long? sessionScopedPolicyId = sessionScopedPolicyIdValue > 0 ? sessionScopedPolicyIdValue : null;
                         var components = PayloadComponents(command);
                         if (components.Count == 0) throw new InvalidOperationException("Approval session contained no components.");
                         var sources = components.Select(c => File.Exists(c.FilePath)
@@ -199,7 +233,7 @@ public sealed class AgentWorker : BackgroundService
                                                     : (!string.IsNullOrWhiteSpace(c.PolicySourcePath) && File.Exists(c.PolicySourcePath) ? c.PolicySourcePath! : c.FilePath))
                                                 .Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                         if (sources.Length == 0) throw new FileNotFoundException("None of the approved session components are still available for policy generation.");
-                        var sessionResult = await _policies.ApproveFilesAsync(sources, sessionRequestId, ct);
+                        var sessionResult = await _policies.ApproveFilesAsync(sources, sessionRequestId, sessionScopedPolicyId, ct);
                         complete.Success = true;
                         complete.Result = sessionResult.ExpandedFiles > 0
                             ? $"Supplemental policy {sessionResult.PolicyId} installed for {sources.Length} requested component(s), plus {sessionResult.ExpandedFiles} same-publisher component(s) discovered in protected application directories."
@@ -211,6 +245,7 @@ public sealed class AgentWorker : BackgroundService
                         complete.Publisher = sessionResult.Publisher;
                         complete.ProductName = sessionResult.ProductName;
                         complete.FileVersion = sessionResult.FileVersion;
+                        complete.BackgroundQueued = sessionResult.BackgroundQueued;
                         _log.Write($"command {command.Id} session policy installed id={sessionResult.PolicyId} rule={sessionResult.RuleType} requested={sources.Length} policyFiles={sessionResult.PolicyFiles} expanded={sessionResult.ExpandedFiles}");
                         break;
                     case "revoke_approval":

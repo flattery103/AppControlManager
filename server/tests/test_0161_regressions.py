@@ -15,14 +15,10 @@ os.environ.setdefault('APPCONTROL_DB', str(Path(tempfile.gettempdir()) / 'acm-te
 class Release0161RegressionTests(unittest.TestCase):
     def test_learning_to_enforcement_uses_learned_paths_without_bundle_reexpansion(self):
         text = (ROOT / 'windows-agent' / 'scripts' / 'End-LearningAndEnforce.ps1').read_text(encoding='utf-8')
-        self.assertIn('Select-Object -Unique', text)
-        self.assertIn('ACM_STAGE learned-collection', text)
-        self.assertIn('ACM_STAGE learned-dedup', text)
         self.assertIn('ACM_STAGE enforcement-total', text)
-        self.assertIn("StartsWith('ACM_STAGE')", text)
-        # 0.16.1 removed recursive bundle re-expansion. Later releases may route the learned
-        # snapshot through a dedicated baseline builder, but must not restore the old
-        # New-SupplementalForFiles call without -AlreadyExpanded.
+        # 0.16.1 removed recursive bundle re-expansion. Later releases may prepare learned
+        # authorization incrementally, but must not restore the old recursive helper path.
+        self.assertNotIn('New-SupplementalForFiles.ps1" -FilePath $paths', text)
         if 'New-SupplementalForFiles.ps1' in text:
             self.assertIn('-AlreadyExpanded', text)
 
@@ -40,7 +36,8 @@ class Release0161RegressionTests(unittest.TestCase):
         text = (ROOT / 'windows-agent' / 'src' / 'AppGuard.Service' / 'AgentWorker.cs').read_text(encoding='utf-8')
         self.assertIn('RunMaintenanceLoopAsync', text)
         self.assertIn('RunCommandLoopAsync', text)
-        self.assertIn('Task.WhenAll(maintenanceTask, commandTask, pipeTask)', text)
+        self.assertIn('Task.WhenAll(maintenanceTask, commandTask', text)
+        self.assertIn('pipeTask', text)
         maintenance = text[text.index('private async Task RunMaintenanceLoopAsync'):text.index('private async Task RunCommandLoopAsync')]
         self.assertIn('HeartbeatAsync', maintenance)
         self.assertNotIn('ProcessCommandsAsync', maintenance)

@@ -23,10 +23,13 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("learning_mode")] public bool LearningMode { get; set; }
     [JsonPropertyName("policy_mode")] public string PolicyMode { get; set; } = "unknown";
     [JsonPropertyName("script_enforcement_disabled")] public bool? ScriptEnforcementDisabled { get; set; }
-    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.16.2";
+    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.16.3";
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("update_status")] public string? UpdateStatus { get; set; }
     [JsonPropertyName("update_result")] public string? UpdateResult { get; set; }
+    [JsonPropertyName("background_policy_status")] public string? BackgroundPolicyStatus { get; set; }
+    [JsonPropertyName("background_policy_pending")] public int? BackgroundPolicyPending { get; set; }
+    [JsonPropertyName("background_policy_failed")] public int? BackgroundPolicyFailed { get; set; }
 }
 
 public sealed class EventUpload
@@ -140,6 +143,16 @@ public sealed class AgentCommand
     [JsonPropertyName("claim_token")] public string? ClaimToken { get; set; }
 }
 
+public sealed class BackgroundPolicyReport
+{
+    [JsonPropertyName("request_id")] public long RequestId { get; set; }
+    [JsonPropertyName("scoped_policy_id")] public long? ScopedPolicyId { get; set; }
+    [JsonPropertyName("status")] public string Status { get; set; } = "";
+    [JsonPropertyName("policy_id")] public string? PolicyId { get; set; }
+    [JsonPropertyName("detail")] public string? Detail { get; set; }
+    [JsonPropertyName("components")] public List<ApprovalComponent> Components { get; set; } = [];
+}
+
 public sealed class CommandComplete
 {
     [JsonPropertyName("claim_token")] public string? ClaimToken { get; set; }
@@ -152,6 +165,7 @@ public sealed class CommandComplete
     [JsonPropertyName("publisher")] public string? Publisher { get; set; }
     [JsonPropertyName("product_name")] public string? ProductName { get; set; }
     [JsonPropertyName("file_version")] public string? FileVersion { get; set; }
+    [JsonPropertyName("background_queued")] public bool BackgroundQueued { get; set; }
 }
 
 public sealed class SupplementalResult
@@ -166,6 +180,8 @@ public sealed class SupplementalResult
     [JsonPropertyName("requested_files")] public int RequestedFiles { get; set; }
     [JsonPropertyName("policy_files")] public int PolicyFiles { get; set; }
     [JsonPropertyName("expanded_files")] public int ExpandedFiles { get; set; }
+    [JsonPropertyName("primary_rule_mode")] public string? PrimaryRuleMode { get; set; }
+    [JsonPropertyName("background_queued")] public bool BackgroundQueued { get; set; }
 }
 
 

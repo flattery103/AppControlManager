@@ -94,6 +94,12 @@ public sealed class ApiClient
         return await response.Content.ReadFromJsonAsync<List<AgentCommand>>(Json, ct) ?? [];
     }
 
+    public async Task ReportBackgroundPolicyAsync(BackgroundPolicyReport body, CancellationToken ct)
+    {
+        using var req = Request(HttpMethod.Post, "/api/background-policies/report", body);
+        using var _ = await SendAsync(req, ct);
+    }
+
     public async Task CompleteCommandAsync(long id, CommandComplete body, CancellationToken ct)
     {
         using var req = Request(HttpMethod.Post, $"/api/commands/{id}/complete", body);

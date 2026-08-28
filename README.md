@@ -1,5 +1,12 @@
-# AppControl Manager 0.16.2
+# AppControl Manager 0.16.3
 
+## 0.16.3 fast-primary approval and background coverage milestone
+
+Version 0.16.3 changes the approval architecture so a foreground approval installs one primary ProductName-scoped FilePublisher authorization first, then prepares and installs remaining same-root/same-signer application coverage as serialized background work. Learning mode uses the same reusable rule-fragment cache for learning precomputation, and Enable Enforcement consumes prepared fragments plus only the final unprepared delta instead of rebuilding the entire learned history. Primary approvals remain approved if background bundle coverage fails, and revocation removes all AppControl Manager policy layers linked to the request.
+
+The server also adds a global **Settings → Display timezone** option using IANA timezone identifiers. Database and agent/API timestamps remain UTC, while human-facing server timestamps are rendered cleanly in the configured DST-aware timezone.
+
+**Rollback/reference baseline:** retain AppControl Manager **0.16.2** as the known rollback baseline for this architecture branch. If the 0.16.3 primary approval/background bundle model performs poorly or produces unacceptable authorization/revocation behavior, stop rollout and return development to the retained 0.16.2 source rather than layering more architectural changes on top.
 
 ## 0.16.2 learned-baseline rule-generation optimization
 
@@ -19,7 +26,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.2`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.3`:
 
 ```text
 AZURE_CLIENT_ID

@@ -13,6 +13,7 @@ import zipfile
 import shutil
 import shlex
 import subprocess
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -20,6 +21,7 @@ from typing import Optional
 from pathlib import Path
 from urllib.parse import urlencode, quote
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -33,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.16.2")
+app = FastAPI(title="AppControl Manager Server", version="0.16.3")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -47,10 +49,36 @@ GITHUB_TOKEN = os.getenv("APPCONTROL_GITHUB_TOKEN", "").strip()
 SERVER_UPDATE_SCRIPT = Path(os.getenv("APPCONTROL_UPDATE_SCRIPT", "/opt/appcontrol-manager/update-from-github.sh"))
 SERVER_UPDATE_LOG = Path(os.getenv("APPCONTROL_UPDATE_LOG", "/var/log/appcontrol-manager-update.log"))
 SERVER_UPDATE_UNIT = os.getenv("APPCONTROL_UPDATE_UNIT", "appcontrol-manager-update").strip() or "appcontrol-manager-update"
+_DISPLAY_TIMEZONE = 'UTC'
 
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def validated_timezone_name(value: Optional[str]) -> str:
+    candidate = (value or 'UTC').strip() or 'UTC'
+    try:
+        ZoneInfo(candidate)
+        return candidate
+    except (ZoneInfoNotFoundError, ValueError):
+        return 'UTC'
+
+
+def format_display_time(value: Optional[str], timezone_name: str, compact: bool = False) -> str:
+    if not value:
+        return ''
+    try:
+        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(ZoneInfo(validated_timezone_name(timezone_name)))
+        clock = local.strftime('%I:%M %p').lstrip('0')
+        if compact:
+            return f"{local.strftime('%b')} {local.day} {clock}"
+        return f"{local.strftime('%b')} {local.day}, {local.year} {clock}"
+    except Exception:
+        return value
 
 
 @contextmanager
@@ -68,6 +96,19 @@ def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition:
     cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def get_server_setting(conn: sqlite3.Connection, key: str, default: str) -> str:
+    row = conn.execute('SELECT setting_value FROM server_settings WHERE setting_key=?', (key,)).fetchone()
+    return str(row['setting_value']) if row and row['setting_value'] is not None else default
+
+
+def set_server_setting(conn: sqlite3.Connection, key: str, value: str, actor: str) -> None:
+    conn.execute(
+        """INSERT INTO server_settings(setting_key,setting_value,updated_at,updated_by) VALUES(?,?,?,?)
+           ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
+        (key, value, utcnow(), actor),
+    )
 
 
 def init_db():
@@ -93,6 +134,12 @@ def init_db():
                 slug TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS server_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT
             );
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,6 +344,18 @@ def init_db():
                 approved_at TEXT NOT NULL,
                 UNIQUE(device_id, file_path, policy_id)
             );
+            CREATE TABLE IF NOT EXISTS approval_background_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                request_id INTEGER NOT NULL,
+                policy_definition_id INTEGER,
+                policy_id TEXT,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(device_id,request_id,policy_id)
+            );
             CREATE TABLE IF NOT EXISTS blocked_applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id TEXT NOT NULL,
@@ -334,6 +393,9 @@ def init_db():
         ensure_column(conn, "devices", "update_status", "TEXT")
         ensure_column(conn, "devices", "update_result", "TEXT")
         ensure_column(conn, "devices", "last_update_at", "TEXT")
+        ensure_column(conn, "devices", "background_policy_status", "TEXT")
+        ensure_column(conn, "devices", "background_policy_pending", "INTEGER")
+        ensure_column(conn, "devices", "background_policy_failed", "INTEGER")
         ensure_column(conn, "devices", "offboard_status", "TEXT")
         ensure_column(conn, "devices", "offboard_result", "TEXT")
         ensure_column(conn, "devices", "offboard_requested_at", "TEXT")
@@ -1103,7 +1165,10 @@ def validate_agent_package(path: Path, expected_version: str):
 
 @app.on_event("startup")
 def startup():
+    global _DISPLAY_TIMEZONE
     init_db()
+    with db() as conn:
+        _DISPLAY_TIMEZONE = validated_timezone_name(get_server_setting(conn, 'display_timezone', 'UTC'))
 
 
 class EnrollRequest(BaseModel):
@@ -1125,6 +1190,9 @@ class HeartbeatRequest(BaseModel):
     os_version: Optional[str] = None
     update_status: Optional[str] = None
     update_result: Optional[str] = None
+    background_policy_status: Optional[str] = None
+    background_policy_pending: Optional[int] = None
+    background_policy_failed: Optional[int] = None
 
 
 class EventIn(BaseModel):
@@ -1186,6 +1254,15 @@ def component_as_approval(component: ApprovalComponentIn) -> ApprovalIn:
     )
 
 
+class BackgroundPolicyReport(BaseModel):
+    request_id: int
+    scoped_policy_id: Optional[int] = None
+    status: str
+    policy_id: Optional[str] = None
+    detail: Optional[str] = None
+    components: list[ApprovalComponentIn] = Field(default_factory=list)
+
+
 class CommandComplete(BaseModel):
     success: bool
     claim_token: Optional[str] = None
@@ -1197,6 +1274,7 @@ class CommandComplete(BaseModel):
     publisher: Optional[str] = None
     product_name: Optional[str] = None
     file_version: Optional[str] = None
+    background_queued: bool = False
 
 
 class OffboardComplete(BaseModel):
@@ -1386,6 +1464,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         ]
         if principal.can_manage_global:
             administration.append(('/server-updates','Server Updates','⬆'))
+            administration.append(('/settings','Settings','⚙'))
     return (
         "<aside class='sidebar'><a class='side-brand' href='/'><span class='brand-mark'>AC</span><span><b>AppControl Manager</b><small>Application Control</small></span></a>"
         "<div class='side-scroll'>"
@@ -1393,7 +1472,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.16.2</div></aside>"
+        + "</div><div class='side-footer'>Server 0.16.3</div></aside>"
     )
 
 
@@ -1791,7 +1870,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.16.2"}
+    return {"ok": True, "version": "0.16.3"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -1831,11 +1910,15 @@ def heartbeat(req: HeartbeatRequest, device_id: str = Depends(agent_auth)):
             """UPDATE devices SET last_seen=?,learning_mode=?,policy_mode=?,
                script_enforcement_disabled=COALESCE(?,script_enforcement_disabled),
                agent_version=COALESCE(?,agent_version),os_version=COALESCE(?,os_version),
-               update_status=COALESCE(?,update_status),update_result=COALESCE(?,update_result) WHERE id=?""",
+               update_status=COALESCE(?,update_status),update_result=COALESCE(?,update_result),
+               background_policy_status=COALESCE(?,background_policy_status),
+               background_policy_pending=COALESCE(?,background_policy_pending),
+               background_policy_failed=COALESCE(?,background_policy_failed) WHERE id=?""",
             (
                 utcnow(), 1 if learning else 0, mode,
                 None if req.script_enforcement_disabled is None else (1 if req.script_enforcement_disabled else 0),
-                req.agent_version, req.os_version, req.update_status, req.update_result, device_id,
+                req.agent_version, req.os_version, req.update_status, req.update_result,
+                req.background_policy_status, req.background_policy_pending, req.background_policy_failed, device_id,
             ),
         )
         if req.update_status in {'installed','rolled_back','failed'}:
@@ -2179,6 +2262,48 @@ def offboard_complete(req: OffboardComplete, device_id: str = Depends(agent_auth
     return {'ok':True}
 
 
+@app.post("/api/background-policies/report")
+def report_background_policy(req: BackgroundPolicyReport, device_id: str = Depends(agent_auth)):
+    status = (req.status or '').strip().lower()
+    if status not in {'installed','failed'}:
+        raise HTTPException(status_code=400, detail='Background policy status must be installed or failed')
+    now = utcnow()
+    with db() as conn:
+        request = conn.execute("SELECT * FROM approval_requests WHERE id=? AND device_id=?", (req.request_id, device_id)).fetchone()
+        if not request:
+            raise HTTPException(status_code=404, detail='Approval request not found')
+        policy_id = (req.policy_id or '').upper() or None
+        existing = conn.execute("SELECT id FROM approval_background_policies WHERE device_id=? AND request_id=? AND ((policy_id IS NULL AND ? IS NULL) OR upper(policy_id)=upper(?)) ORDER BY id DESC LIMIT 1", (device_id, req.request_id, policy_id, policy_id)).fetchone()
+        if not existing and policy_id:
+            existing = conn.execute("SELECT id FROM approval_background_policies WHERE device_id=? AND request_id=? AND policy_id IS NULL AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1", (device_id, req.request_id)).fetchone()
+        if existing:
+            conn.execute("UPDATE approval_background_policies SET policy_definition_id=?,policy_id=?,status=?,detail=?,completed_at=? WHERE id=?", (req.scoped_policy_id, policy_id, status, req.detail, now, existing['id']))
+        else:
+            conn.execute("INSERT INTO approval_background_policies(device_id,request_id,policy_definition_id,policy_id,status,detail,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?)", (device_id, req.request_id, req.scoped_policy_id, policy_id, status, req.detail, now, now))
+        if status == 'installed':
+            if not policy_id:
+                raise HTTPException(status_code=400, detail='Installed background policy report requires policy_id')
+            scoped_policy_id = req.scoped_policy_id
+            if scoped_policy_id is None:
+                primary = conn.execute("SELECT policy_definition_id FROM approved_applications WHERE device_id=? AND request_id=? ORDER BY id DESC LIMIT 1", (device_id, req.request_id)).fetchone()
+                if primary:
+                    scoped_policy_id = primary['policy_definition_id']
+            for component in req.components:
+                conn.execute(
+                    """INSERT OR IGNORE INTO approved_components
+                       (device_id,request_id,file_path,sha256,publisher,product_name,file_version,rule_type,policy_id,approved_at,policy_definition_id,status)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (device_id, req.request_id, component.file_path, component.sha256, component.publisher, component.product_name,
+                     component.file_version, 'Background Application Bundle', policy_id, now, scoped_policy_id, 'approved'),
+                )
+            current = conn.execute("SELECT status,decision_note FROM approval_requests WHERE id=?", (req.request_id,)).fetchone()
+            if current and current['status'] in {'approved','approved_existing'}:
+                note = current['decision_note'] or ''
+                if not any(word in note.lower() for word in ('denied','blocked')):
+                    conn.execute("UPDATE approval_requests SET decision_note=? WHERE id=?", ('Primary authorization installed; background application coverage completed.', req.request_id))
+        return {'ok': True}
+
+
 @app.get("/api/commands")
 def get_commands(device_id: str = Depends(agent_auth)):
     # Claim exactly one validated command at a time. A fresh opaque claim is issued on
@@ -2268,35 +2393,29 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
             )
 
         if row["command_type"] == "revoke_approval":
-            policy_id = (payload.get("policy_id") or "").upper()
+            policy_id = normalize_policy_guid(payload.get("policy_id"))
             actor = payload.get("requested_by") or "administrator"
             if req.success and policy_id:
-                request_ids = [r["request_id"] for r in conn.execute(
+                request_ids=set()
+                for sql in (
                     "SELECT DISTINCT request_id FROM approved_components WHERE device_id=? AND upper(policy_id)=upper(?) AND request_id IS NOT NULL",
-                    (device_id, policy_id),
-                ).fetchall()]
-                conn.execute(
-                    "UPDATE approved_components SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",
-                    (utcnow(), actor, device_id, policy_id),
-                )
-                conn.execute(
-                    "UPDATE approved_applications SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",
-                    (utcnow(), actor, device_id, policy_id),
-                )
+                    "SELECT DISTINCT request_id FROM approved_applications WHERE device_id=? AND upper(policy_id)=upper(?) AND request_id IS NOT NULL",
+                    "SELECT DISTINCT request_id FROM approval_background_policies WHERE device_id=? AND upper(policy_id)=upper(?) AND request_id IS NOT NULL",
+                ):
+                    request_ids.update(r[0] for r in conn.execute(sql,(device_id,policy_id)).fetchall())
+                conn.execute("UPDATE approved_components SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),actor,device_id,policy_id))
+                conn.execute("UPDATE approved_applications SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),actor,device_id,policy_id))
+                conn.execute("UPDATE approval_background_policies SET status='revoked',completed_at=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),device_id,policy_id))
                 for rid in request_ids:
-                    conn.execute(
-                        "UPDATE approval_requests SET status='revoked',decision_note=? WHERE id=?",
-                        (f"Approval policy revoked by {actor}. Other policies may still allow the application.", rid),
-                    )
+                    remaining=linked_policy_ids_for_request(conn,device_id,rid)
+                    if remaining:
+                        conn.execute("UPDATE approval_requests SET status='approved',decision_note=? WHERE id=?",(f"Revocation in progress: {len(remaining)} AppControl Manager policy layer(s) remain.",rid))
+                    else:
+                        conn.execute("UPDATE approval_requests SET status='revoked',decision_note=? WHERE id=?",(f"All AppControl Manager approval policy layers revoked by {actor}.",rid))
             elif not req.success and policy_id:
-                conn.execute(
-                    "UPDATE approved_components SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",
-                    (device_id, policy_id),
-                )
-                conn.execute(
-                    "UPDATE approved_applications SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",
-                    (device_id, policy_id),
-                )
+                conn.execute("UPDATE approved_components SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(device_id,policy_id))
+                conn.execute("UPDATE approved_applications SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(device_id,policy_id))
+                conn.execute("UPDATE approval_background_policies SET status='installed',detail=? WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(req.result,device_id,policy_id))
 
         if row["command_type"] == "block_file":
             block_id = payload.get("block_id")
@@ -2345,17 +2464,26 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
                         "UPDATE approval_requests SET status='approved',decision_note=? WHERE id=?",
                         (req.result, request_id),
                     )
+                    if req.background_queued:
+                        pending_detail='Approved — background application coverage is still processing'
+                        existing_background=conn.execute("SELECT id FROM approval_background_policies WHERE device_id=? AND request_id=? AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1",(device_id,request_id)).fetchone()
+                        if existing_background:
+                            conn.execute("UPDATE approval_background_policies SET status='processing',detail=? WHERE id=?",(pending_detail,existing_background['id']))
+                        else:
+                            conn.execute("INSERT INTO approval_background_policies(device_id,request_id,policy_definition_id,policy_id,status,detail,created_at) VALUES(?,?,?,?,?,?,?)",(device_id,request_id,payload.get('scoped_policy_id'),None,'processing',pending_detail,utcnow()))
                     ar = conn.execute("SELECT * FROM approval_requests WHERE id=?", (request_id,)).fetchone()
-                    items = conn.execute(
-                        "SELECT * FROM approval_request_items WHERE request_id=? ORDER BY id", (request_id,)
-                    ).fetchall()
-                    if row["command_type"] == "approve_session":
-                        commanded = {str(c.get("file_path", "")).lower() for c in payload.get("components", []) if c.get("file_path")}
-                        items = [item for item in items if str(item["original_path"]).lower() in commanded]
+                    items = []
+                    if req.file_path:
+                        primary_item = conn.execute(
+                            "SELECT * FROM approval_request_items WHERE request_id=? AND lower(original_path)=lower(?) ORDER BY id LIMIT 1",
+                            (request_id, req.file_path),
+                        ).fetchone()
+                        if primary_item:
+                            items = [primary_item]
                     if not items and ar:
                         items = [dict(
-                            original_path=ar["file_path"], sha256=ar["sha256"], publisher=ar["publisher"],
-                            product_name=ar["product_name"], file_version=ar["file_version"]
+                            original_path=req.file_path or ar["file_path"], sha256=req.sha256 or ar["sha256"], publisher=req.publisher or ar["publisher"],
+                            product_name=req.product_name or ar["product_name"], file_version=req.file_version or ar["file_version"]
                         )]
                     policy_id = (req.policy_id or "").upper() or f"command-{command_id}"
                     rule_type = req.rule_type or "Generated policy"
@@ -2414,14 +2542,8 @@ def filename(path: Optional[str]) -> str:
     return ntpath.basename(path or '') or (path or '')
 
 
-def display_time(value: Optional[str]) -> str:
-    if not value:
-        return ''
-    try:
-        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        return dt.strftime('%Y-%m-%d %H:%M')
-    except Exception:
-        return value
+def display_time(value: Optional[str], compact: bool = False) -> str:
+    return format_display_time(value, _DISPLAY_TIMEZONE, compact)
 
 
 REQUEST_STATUS_LABELS = {
@@ -3006,6 +3128,23 @@ def devices_page(q:str='',organization_id:str='',group_id:str='',mode:str='',sta
     return page('Devices',body,principal,subtitle='Search, filter and manage endpoint inventory. Select devices for bulk mode or group changes.',actions="<a class='button' href='/reports/device-compliance'>Compliance Report</a><a class='button' href='/reports/device-compliance.csv'>Export CSV</a>")
 
 
+def request_background_status(conn: sqlite3.Connection, request_id: int) -> Optional[str]:
+    row = conn.execute(
+        "SELECT status FROM approval_background_policies WHERE request_id=? ORDER BY id DESC LIMIT 1",
+        (request_id,),
+    ).fetchone()
+    if not row:
+        return None
+    state = (row['status'] or '').strip().lower()
+    if state in {'queued','processing','revoking'}:
+        return 'Approved — background application coverage is still processing'
+    if state == 'installed':
+        return 'Bundle ready'
+    if state == 'failed':
+        return 'Background coverage failed; primary approval remains installed'
+    return None
+
+
 @app.get('/requests', response_class=HTMLResponse)
 def requests_page(q:str='', request_status:str='', organization_id:str='', request_kind:str='', period:int=0,
                   sort:str='queue', page_num:int=Query(1,alias='page'), principal:Principal=Depends(admin_auth)):
@@ -3110,6 +3249,7 @@ def request_detail(request_id:int, principal:Principal=Depends(admin_auth)):
         items=conn.execute('SELECT * FROM approval_request_items WHERE request_id=? ORDER BY id',(request_id,)).fetchall()
         d=conn.execute('SELECT * FROM devices WHERE id=?',(r['device_id'],)).fetchone()
         opts=scope_options_for_device(conn,principal,d)
+        background_label=request_background_status(conn,request_id)
     rows=''.join(f"<tr><td>{escape(i['product_name'] or '')}</td><td><code>{escape(i['original_path'])}</code></td><td>{escape(i['publisher'] or '')}</td><td>{escape(i['file_version'] or '')}</td><td>{escape(i['parent_path'] or '')}</td><td><code title='{escape(i['sha256'] or '')}'>{escape((i['sha256'] or '')[:20])}</code></td></tr>" for i in items)
     action=''
     if r['status']=='pending' and principal.can_approve:
@@ -3124,7 +3264,7 @@ def request_detail(request_id:int, principal:Principal=Depends(admin_auth)):
     note=escape((r['decision_note'] or '').strip() or 'No decision message recorded.')
     details=f"""<div class='panel'><div class='details-grid'>
       <div class='detail-item'><span class='muted'>Application</span>{app_cell(r['product_name'],r['file_path'])}</div>
-      <div class='detail-item'><span class='muted'>Status</span><span class='badge {status_cls}'>{escape(status_label)}</span></div>
+      <div class='detail-item'><span class='muted'>Status</span><span class='badge {status_cls}'>{escape(status_label)}</span>{f"<div class='muted'>{escape(background_label)}</div>" if background_label else ''}</div>
       <div class='detail-item'><span class='muted'>Device</span><b><a href='/devices/{r['device_id']}'>{escape(r['hostname'])}</a></b><div class='muted'>{escape(r['organization_name'] or '')}</div></div>
       <div class='detail-item'><span class='muted'>Requested by</span><b>{escape(r['requested_by'] or 'Unknown')}</b></div>
       <div class='detail-item'><span class='muted'>Request type</span><b>{escape(request_kind)}</b><div class='muted'>{component_count} component{'s' if component_count!=1 else ''}</div></div>
@@ -3166,10 +3306,10 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     if principal.can_manage_org:
         opts="<option value=''>No group</option>"+''.join(f"<option value='{g['id']}' {'selected' if d['group_id']==g['id'] else ''}>{escape(g['name'])}</option>" for g in groups)
         group_form=f"<form class='actions' method='post' action='/admin/devices/{device_id}/group'><label>Device group</label><select name='group_id'>{opts}</select><button>Save</button></form>"
-    appr=''.join(f"<tr><td>{escape(a['product_name'] or '')}</td><td><code>{escape(a['file_path'])}</code></td><td>{escape(a['rule_type'] or '')}</td><td>{escape(a['status'] or '')}</td><td>{escape(a['approved_at'] or '')}</td></tr>" for a in approvals)
-    blk=''.join(f"<tr><td>{escape(b['product_name'] or '')}</td><td><code>{escape(b['file_path'])}</code></td><td>{escape(b['status'])}</td><td>{escape(b['blocked_at'] or b['created_at'])}</td></tr>" for b in blocks)
-    reqs=''.join(f"<tr><td><a href='/requests/{r['id']}'>{r['id']}</a></td><td>{escape(r['product_name'] or '')}</td><td>{escape(r['status'])}</td><td>{escape(r['requested_by'] or '')}</td><td>{escape(r['created_at'])}</td></tr>" for r in requests)
-    hist=''.join(f"<tr><td>{escape(t or '')}</td><td>{escape(k)}</td><td><code>{escape(v or '')}</code></td></tr>" for t,k,v in timeline)
+    appr=''.join(f"<tr><td>{escape(a['product_name'] or '')}</td><td><code>{escape(a['file_path'])}</code></td><td>{escape(a['rule_type'] or '')}</td><td>{escape(a['status'] or '')}</td><td>{escape(display_time(a['approved_at']))}</td></tr>" for a in approvals)
+    blk=''.join(f"<tr><td>{escape(b['product_name'] or '')}</td><td><code>{escape(b['file_path'])}</code></td><td>{escape(b['status'])}</td><td>{escape(display_time(b['blocked_at'] or b['created_at']))}</td></tr>" for b in blocks)
+    reqs=''.join(f"<tr><td><a href='/requests/{r['id']}'>{r['id']}</a></td><td>{escape(r['product_name'] or '')}</td><td>{escape(r['status'])}</td><td>{escape(r['requested_by'] or '')}</td><td>{escape(display_time(r['created_at']))}</td></tr>" for r in requests)
+    hist=''.join(f"<tr><td>{escape(display_time(t))}</td><td>{escape(k)}</td><td><code>{escape(v or '')}</code></td></tr>" for t,k,v in timeline)
     policies=''.join(pol_rows)
     with db() as conn:
         active_releases=conn.execute("SELECT * FROM agent_releases WHERE active=1 AND deleted_at IS NULL ORDER BY id DESC").fetchall()
@@ -3201,9 +3341,16 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     status_online=bool(d['last_seen'] and d['last_seen']>=(datetime.now(timezone.utc)-timedelta(minutes=10)).isoformat())
     status_badge=f"<span class='badge {'badge-ok' if status_online else 'badge-warn'}'>{'Online' if status_online else 'Offline'}</span>"
     control_panel=f"<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Connectivity</span>{status_badge}</div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}</div>"
+
+    background_pending=int(d['background_policy_pending'] or 0)
+    background_failed=int(d['background_policy_failed'] or 0)
+    background_status=(d['background_policy_status'] or ('failed' if background_failed else 'processing' if background_pending else 'idle')).replace('_',' ').title()
+    background_panel=''
+    if background_pending or background_failed:
+        background_panel=f"<div class='panel'><h2>Background Policy Work</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Status</span><b>{escape(background_status)}</b></div><div class='detail-item'><span class='muted'>Pending</span><b>{background_pending}</b></div><div class='detail-item'><span class='muted'>Failed</span><b>{background_failed}</b></div></div><p class='muted'>Primary approvals remain installed while AppControl Manager prepares auxiliary application coverage.</p></div>"
     jump="<div class='actions no-print' style='margin-bottom:18px'><a class='button btn-quiet' href='#policies'>Effective Policies</a><a class='button btn-quiet' href='#activity'>Activity</a><a class='button btn-quiet' href='#approved-apps'>Approvals</a><a class='button btn-quiet' href='#blocked-apps'>Blocks</a><a class='button btn-quiet' href='#requests'>Requests</a></div>"
     body=f"""<div class='grid'><div class='stat'><span class='stat-label'>Organization</span><b style='font-size:18px'>{escape(d['organization_name'] or '')}</b></div><div class='stat'><span class='stat-label'>Device Group</span><b style='font-size:18px'>{escape(d['group_name'] or 'None')}</b></div><div class='stat'><span class='stat-label'>App Control Mode</span><b style='font-size:18px'>{escape(mode_name)}</b></div><div class='stat'><span class='stat-label'>Agent Version</span><b style='font-size:18px'>{escape(d['agent_version'] or '')}</b></div></div>
-{jump}{control_panel}
+{jump}{control_panel}{background_panel}
 <div id='policies' class='section-head'><h2>Effective Scoped Policies</h2><a href='/reports/policies?device_id={quote(device_id)}'>Device Policy Report →</a></div><div class='card'><table><tr><th>Action</th><th>Application</th><th>Scope</th><th>Publisher</th><th>Product</th></tr>{policies or '<tr><td colspan=5><div class=empty>No active scoped policies apply to this device.</div></td></tr>'}</table></div>
 <div id='activity' class='section-head'><h2>Activity / History</h2><a href='/reports/blocked-events?device_id={quote(device_id)}'>Blocked Event Report →</a></div><div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{hist or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>
 <div id='approved-apps' class='section-head'><h2>Approved Applications</h2></div><div class='card'><table><tr><th>Product</th><th>File</th><th>Rule</th><th>Status</th><th>Approved</th></tr>{appr or '<tr><td colspan=5><div class=empty>No approvals.</div></td></tr>'}</table></div>
@@ -3600,6 +3747,49 @@ def deployment_scope_label(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
     return st
 
 
+@app.get('/settings', response_class=HTMLResponse)
+def settings_page(saved:int=0, principal:Principal=Depends(admin_auth)):
+    if not principal.can_manage_global:
+        raise HTTPException(status_code=403, detail='Global administrator permission required.')
+    with db() as conn:
+        current = validated_timezone_name(get_server_setting(conn, 'display_timezone', 'UTC'))
+    common_zones = [
+        'UTC', 'America/New_York', 'America/Chicago', 'America/Denver',
+        'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu',
+    ]
+    options=''.join(f"<option value='{escape(zone)}'></option>" for zone in common_zones)
+    notice="<div class='notice-info'><b>Timezone saved.</b> Human-facing server timestamps now use the selected timezone.</div>" if saved else ''
+    body=f"""{notice}<div class='panel'><h2>Time & Display</h2>
+      <p class='muted'>AppControl Manager stores timestamps internally in UTC. This setting only changes how times are displayed in the web console and reports. Use an IANA timezone so daylight-saving changes are handled automatically.</p>
+      <div class='details-grid'><div class='detail-item'><span class='muted'>Current display timezone</span><b>{escape(current)}</b></div><div class='detail-item'><span class='muted'>Example</span><b>{escape(display_time(utcnow()))}</b></div></div>
+      <form class='actions' method='post' action='/admin/settings/timezone' style='margin-top:18px'>
+        <label>Display timezone</label><input name='timezone_name' value='{escape(current)}' list='timezone-list' required autocomplete='off'>
+        <datalist id='timezone-list'>{options}</datalist><button class='btn-primary'>Save timezone</button>
+      </form>
+      <p class='muted'>Examples: America/Chicago, America/New_York, America/Los_Angeles. Any valid IANA timezone identifier is accepted.</p>
+    </div>"""
+    return page('Settings', body, principal, subtitle='Server-wide display and administrative settings.')
+
+
+@app.post('/admin/settings/timezone')
+def update_server_timezone(timezone_name:str=Form(...), principal:Principal=Depends(admin_auth)):
+    global _DISPLAY_TIMEZONE
+    if not principal.can_manage_global:
+        raise HTTPException(status_code=403, detail='Global administrator permission required.')
+    candidate=(timezone_name or '').strip()
+    if not candidate:
+        raise HTTPException(status_code=400, detail='Timezone is required.')
+    try:
+        ZoneInfo(candidate)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(status_code=400, detail='Invalid IANA timezone identifier.')
+    with db() as conn:
+        set_server_setting(conn, 'display_timezone', candidate, principal.username)
+        audit(conn, principal.username, 'server_timezone_changed', object_type='server_setting', object_id='display_timezone', detail=candidate)
+    _DISPLAY_TIMEZONE = candidate
+    return RedirectResponse('/settings?saved=1', status_code=303)
+
+
 @app.get('/server-updates', response_class=HTMLResponse)
 def server_updates_page(principal: Principal = Depends(admin_auth)):
     if not principal.can_manage_global:
@@ -3648,7 +3838,7 @@ def server_updates_page(principal: Principal = Depends(admin_auth)):
         release_panel = f"""
         <div class='grid'>
           <div class='stat'><span class='stat-label'>Current Server</span><b>{escape(current)}</b><span class='trend'>Installed</span></div>
-          <div class='stat'><span class='stat-label'>Latest GitHub Release</span><b>{escape(release.version)}</b><span class='trend'>{escape(release.published_at or 'Publication time unavailable')}</span></div>
+          <div class='stat'><span class='stat-label'>Latest GitHub Release</span><b>{escape(release.version)}</b><span class='trend'>{escape(display_time(release.published_at) or 'Publication time unavailable')}</span></div>
           <div class='stat'><span class='stat-label'>Status</span><b style='font-size:18px'><span class='badge {status_badge}'>{status_text}</span></b><span class='trend'>{release_link}</span></div>
           <div class='stat'><span class='stat-label'>Matching Agent</span><b style='font-size:18px'>{'Ready' if imported else 'Pending'}</b><span class='trend'>{escape(imported_text)}</span></div>
         </div>
@@ -3997,7 +4187,7 @@ def organizations_page(principal:Principal=Depends(admin_auth)):
             token_html=f"<div class='copy-wrap'><code id='{token_id}' data-copy='{escape(k['token_value'])}'>{escape(k['token_value'])}</code>{copy_button}</div>"
         else:
             token_html=f"<code>{escape(k['token_prefix'] or '')}...</code><div class='muted'>Full token was not retained by releases before 0.12.5. Create a new token to make it reusable/copyable here.</div>"
-        key_rows_parts.append(f"<tr><td>{escape(k['organization_name'])}</td><td>{escape(k['name'])}</td><td>{token_html}</td><td>{'Active' if k['active'] else 'Disabled'}</td><td>{escape(k['last_used_at'] or '')}</td><td>{key_action}</td></tr>")
+        key_rows_parts.append(f"<tr><td>{escape(k['organization_name'])}</td><td>{escape(k['name'])}</td><td>{token_html}</td><td>{'Active' if k['active'] else 'Disabled'}</td><td>{escape(display_time(k['last_used_at']))}</td><td>{key_action}</td></tr>")
     key_rows=''.join(key_rows_parts)
     body=create_org+f"<h2>Organizations</h2><div class='card'><table><tr><th>Name</th><th>Slug</th><th>Devices</th><th>Status</th><th>Management</th></tr>{org_rows}</table></div><h2>Device Groups</h2><div class='card'><table><tr><th>Organization</th><th>Name</th><th>Description</th></tr>{group_rows or '<tr><td colspan=3>No groups.</td></tr>'}</table></div><h2>Enrollment Tokens</h2><div class='notice-info'><b>Deployment tokens are reusable.</b> Active tokens remain valid until you disable them, making them suitable for VSA X and other automated onboarding workflows.</div><div class='card'><table><tr><th>Organization</th><th>Name</th><th>Enrollment token</th><th>Status</th><th>Last used</th><th>Action</th></tr>{key_rows or '<tr><td colspan=6>No enrollment tokens.</td></tr>'}</table></div>"
     return page('Organizations & Device Groups',body,principal)
@@ -4041,7 +4231,7 @@ def account_page(principal:Principal=Depends(admin_auth)):
       <div><div class='muted'>Display name</div><b>{escape(user['display_name'] or user['username'])}</b></div>
       <div><div class='muted'>Role</div><b>{escape(user['role'].replace('_',' ').title())}</b></div>
       <div><div class='muted'>Organization</div><b>{escape(user['organization_name'] or 'Global')}</b></div>
-      <div><div class='muted'>Last login</div><b>{escape(user['last_login'] or '')}</b></div>
+      <div><div class='muted'>Last login</div><b>{escape(display_time(user['last_login']))}</b></div>
       <div><div class='muted'>MFA</div><b>{'Configured' if user['mfa_enabled'] else 'Not configured'}</b></div>
     </div><p style='margin-top:18px' class='actions'><a href='/account/password'><button class='btn-primary'>Change Password</button></a><a href='/account/security'><button>Security / MFA</button></a></p></div>"""
     return page('My Account',body,principal)
@@ -4296,6 +4486,45 @@ def rollout_scoped_block(conn: sqlite3.Connection, policy: sqlite3.Row, actor: s
     return queued, unknown
 
 
+def normalize_policy_guid(value: Optional[str]) -> Optional[str]:
+    candidate=(value or '').strip().strip('{}')
+    try:
+        return str(uuid.UUID(candidate)).upper()
+    except Exception:
+        return None
+
+
+def linked_policy_ids_for_request(conn: sqlite3.Connection, device_id: str, request_id: int) -> list[str]:
+    ids=set()
+    queries=[
+        ("SELECT policy_id FROM approved_applications WHERE device_id=? AND request_id=? AND status IN ('approved','revoking')", (device_id,request_id)),
+        ("SELECT policy_id FROM approved_components WHERE device_id=? AND request_id=? AND status IN ('approved','blocked','revoking')", (device_id,request_id)),
+        ("SELECT policy_id FROM approval_background_policies WHERE device_id=? AND request_id=? AND status IN ('installed','revoking')", (device_id,request_id)),
+    ]
+    for sql,args in queries:
+        for row in conn.execute(sql,args).fetchall():
+            value=row[0]
+            guid=normalize_policy_guid(value)
+            if guid: ids.add(guid)
+    return sorted(ids)
+
+
+def queue_linked_policy_revocations(conn: sqlite3.Connection, device_id: str, request_id: int, actor: str, scoped_policy_id: Optional[int]=None) -> int:
+    policy_ids=linked_policy_ids_for_request(conn,device_id,request_id)
+    queued=0
+    for policy_id in policy_ids:
+        duplicate=conn.execute("SELECT id FROM commands WHERE device_id=? AND command_type='revoke_approval' AND status IN ('pending','processing') AND payload LIKE ? LIMIT 1",(device_id,f'%{policy_id}%')).fetchone()
+        if duplicate: continue
+        payload={'policy_id':policy_id,'requested_by':actor,'request_id':request_id}
+        if scoped_policy_id is not None: payload['scoped_policy_id']=scoped_policy_id
+        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'revoke_approval',json.dumps(payload),'pending',utcnow()))
+        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status IN ('approved','blocked')",(device_id,request_id,policy_id))
+        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status='approved'",(device_id,request_id,policy_id))
+        conn.execute("UPDATE approval_background_policies SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status='installed'",(device_id,request_id,policy_id))
+        queued+=1
+    return queued
+
+
 @app.post("/admin/approved/{component_id}/revoke")
 def revoke_approved(component_id: int, principal: Principal = Depends(admin_auth)):
     require_approver(principal)
@@ -4308,21 +4537,24 @@ def revoke_approved(component_id: int, principal: Principal = Depends(admin_auth
             if pdef and pdef['active']:
                 if pdef['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator required')
                 conn.execute('UPDATE scoped_policies SET active=0,disabled_at=?,disabled_by=? WHERE id=?',(utcnow(),principal.username,pdef['id']))
-                linked=conn.execute("SELECT DISTINCT device_id,policy_id FROM approved_components WHERE policy_definition_id=? AND status='approved'",(pdef['id'],)).fetchall()
+                linked=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(pdef['id'],)).fetchall()
+                queued=0
                 for link in linked:
-                    if re.fullmatch(r'[0-9A-Fa-f-]{36}',link['policy_id'] or ''):
-                        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(link['device_id'],'revoke_approval',json.dumps({'policy_id':link['policy_id'],'requested_by':principal.username,'scoped_policy_id':pdef['id']}),'pending',utcnow()))
-                        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND policy_id=? AND status='approved'",(link['device_id'],link['policy_id']))
-                        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND policy_id=? AND status='approved'",(link['device_id'],link['policy_id']))
-                audit(conn,principal.username,'scoped_policy_disabled',organization_id=pdef['organization_id'],object_type='scoped_policy',object_id=pdef['id'],detail=f'revokes queued={len(linked)}')
+                    queued += queue_linked_policy_revocations(conn,link['device_id'],link['request_id'],principal.username,pdef['id'])
+                audit(conn,principal.username,'scoped_policy_disabled',organization_id=pdef['organization_id'],object_type='scoped_policy',object_id=pdef['id'],detail=f'revokes queued={queued}')
                 return RedirectResponse('/approved',status_code=303)
-        if active_device_command(conn,row['device_id']): return RedirectResponse('/approved?busy=1',status_code=303)
-        policy_id=row['policy_id'] or ''
-        if not re.fullmatch(r'[0-9A-Fa-f-]{36}',policy_id): raise HTTPException(status_code=400,detail='Approval does not have a removable policy GUID.')
-        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(row['device_id'],'revoke_approval',json.dumps({'policy_id':policy_id,'requested_by':principal.username}),'pending',utcnow()))
-        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND policy_id=? AND status IN ('approved','blocked')",(row['device_id'],policy_id))
-        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND policy_id=? AND status='approved'",(row['device_id'],policy_id))
-        audit(conn,principal.username,'approval_revoke_queued',organization_id=row['organization_id'],device_id=row['device_id'],object_type='approved_component',object_id=component_id)
+        request_id=row['request_id']
+        if request_id:
+            queued=queue_linked_policy_revocations(conn,row['device_id'],request_id,principal.username)
+            if queued == 0: raise HTTPException(status_code=400,detail='Approval does not have a removable policy GUID.')
+        else:
+            policy_id=normalize_policy_guid(row['policy_id'])
+            if not policy_id: raise HTTPException(status_code=400,detail='Approval does not have a removable policy GUID.')
+            conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(row['device_id'],'revoke_approval',json.dumps({'policy_id':policy_id,'requested_by':principal.username}),'pending',utcnow()))
+            conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND upper(policy_id)=upper(?) AND status IN ('approved','blocked')",(row['device_id'],policy_id))
+            conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='approved'",(row['device_id'],policy_id))
+            queued=1
+        audit(conn,principal.username,'approval_revoke_queued',organization_id=row['organization_id'],device_id=row['device_id'],object_type='approved_component',object_id=component_id,detail=f'policy layers queued={queued}')
     return RedirectResponse('/approved',status_code=303)
 
 
@@ -4597,13 +4829,11 @@ def disable_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
         conn.execute('UPDATE scoped_policies SET active=0,disabled_at=?,disabled_by=? WHERE id=?',(utcnow(),principal.username,policy_id))
 
         if p['action']=='allow':
-            rows=conn.execute("SELECT DISTINCT device_id,policy_id FROM approved_components WHERE policy_definition_id=? AND status='approved' AND policy_id IS NOT NULL",(policy_id,)).fetchall()
+            rows=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(policy_id,)).fetchall()
+            queued=0
             for r in rows:
-                if re.fullmatch(r'[0-9A-Fa-f-]{36}',r['policy_id'] or ''):
-                    conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(r['device_id'],'revoke_approval',json.dumps({'policy_id':r['policy_id'],'requested_by':principal.username,'scoped_policy_id':policy_id}),'pending',utcnow()))
-                    conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND policy_id=? AND status='approved'",(r['device_id'],r['policy_id']))
-                    conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND policy_id=? AND status='approved'",(r['device_id'],r['policy_id']))
-            detail=f'allow revokes queued={len(rows)}'
+                queued += queue_linked_policy_revocations(conn,r['device_id'],r['request_id'],principal.username,policy_id)
+            detail=f'allow revokes queued={queued}'
         else:
             blocks=conn.execute("SELECT * FROM blocked_applications WHERE policy_definition_id=? AND status IN ('blocking','blocked','failed','unblocking')",(policy_id,)).fetchall()
             queued=0; canceled=0; processing=0

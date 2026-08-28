@@ -1,0 +1,24 @@
+AppControl Manager 0.16.3
+=========================
+
+Fast primary approval
+- Foreground application approval generates and installs the primary authorization first instead of waiting for every discovered component.
+- The primary approval remains the user-visible Approved state while auxiliary coverage proceeds independently.
+
+Background bundle coverage
+- Same-root, same-signer auxiliary application components use durable reusable rule fragments and serialized background bundle policy work.
+- Foreground policy generation has priority; background work processes one item per iteration and continues heartbeats.
+- Background coverage failure is reported separately and does not revoke a successfully installed primary approval.
+- Revocation removes all primary and background policy layers linked to the same approval request.
+
+learning precomputation and enforcement
+- Learning precomputation queues reusable authorization fragments after successful event upload.
+- Enable Enforcement reconciles the final learned delta, generates only missing fragments, merges prepared fragments into the learned baseline, verifies the replacement, removes stale AppControl Manager learned baselines, and flips the base policy to Enforcement last.
+
+Server timezone and timestamps
+- Global administrators can configure a server-wide IANA display timezone from Settings.
+- Timestamps remain stored in UTC but render in a clean, DST-aware local format in the web console.
+
+Rollback / reference baseline
+- AppControl Manager 0.16.2 is the retained rollback and reference baseline for this architecture branch.
+- If the 0.16.3 primary approval/background bundle approach is unsuitable in endpoint testing, stop rollout and return development to the retained 0.16.2 source baseline before pursuing another architecture.

@@ -5,11 +5,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Release0162RegressionTests(unittest.TestCase):
-    def test_enforcement_uses_dedicated_learned_baseline_builder(self):
+    def test_enforcement_uses_prepared_learned_baseline_without_legacy_full_rebuild(self):
         text = (ROOT / 'windows-agent' / 'scripts' / 'End-LearningAndEnforce.ps1').read_text(encoding='utf-8')
-        self.assertIn('New-LearnedBaselinePolicy.ps1', text)
-        self.assertIn('-LearnedApplications $learned', text)
-        self.assertNotIn("New-SupplementalForFiles.ps1\" -FilePath $paths -Name 'AppControl Manager Learned Baseline'", text)
+        self.assertIn('Install-LearnedBaselineFromFragments.ps1', text)
+        self.assertNotIn('New-LearnedBaselinePolicy.ps1', text)
+        self.assertNotIn('New-SupplementalForFiles.ps1" -FilePath $paths', text)
 
     def test_learned_baseline_groups_safe_publisher_products_and_hashes_unsigned_files(self):
         script = ROOT / 'windows-agent' / 'scripts' / 'New-LearnedBaselinePolicy.ps1'
