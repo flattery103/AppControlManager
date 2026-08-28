@@ -9,7 +9,7 @@ namespace AppControlManager.Installer;
 
 internal static class Program
 {
-    private static readonly string Version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.16.4";
+    private static readonly string Version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.16.5";
 
     [STAThread]
     static void Main(string[] args)
@@ -124,7 +124,9 @@ internal static class Program
                 var enrolled=await resp.Content.ReadFromJsonAsync<EnrollResponse>(cancellationToken:ct) ?? throw new InvalidOperationException("Enrollment response was empty.");
 
                 progress?.Report("Installing service, tray application and policy helpers...");
-                Directory.CreateDirectory(ProgramDataRoot); Directory.CreateDirectory(ProgramFilesRoot); Directory.CreateDirectory(Path.Combine(ProgramFilesRoot,"Scripts")); Directory.CreateDirectory(Path.Combine(ProgramDataRoot,"Policies"));
+                Directory.CreateDirectory(ProgramDataRoot); Directory.CreateDirectory(ProgramFilesRoot); Directory.CreateDirectory(Path.Combine(ProgramFilesRoot,"Scripts")); Directory.CreateDirectory(Path.Combine(ProgramDataRoot,"Policies")); Directory.CreateDirectory(Path.Combine(ProgramDataRoot,"RuleWorker"));
+                SecureRuleWorkerDirectory();
+                Directory.CreateDirectory(Path.Combine(ProgramDataRoot,"RuleWorker","Jobs"));
                 File.WriteAllText(Path.Combine(ProgramDataRoot,"config.json"),JsonSerializer.Serialize(new { server_url=server, device_id=enrolled.device_id, device_key=enrolled.device_key },new JsonSerializerOptions{WriteIndented=true}));
                 File.Copy(Path.Combine(payload,"Service","AppControlManager.Service.exe"),Path.Combine(ProgramFilesRoot,"AppControlManager.Service.exe"),true);
                 File.Copy(Path.Combine(payload,"Tray","AppControlManager.Tray.exe"),Path.Combine(ProgramFilesRoot,"AppControlManager.Tray.exe"),true);
@@ -134,6 +136,7 @@ internal static class Program
                     File.Copy(script,Path.Combine(ProgramDataRoot,Path.GetFileName(script)),true);
                 }
 
+                EnsureRuleWorkerService();
                 Run("sc.exe",$"create AppControlManager binPath= \"{Path.Combine(ProgramFilesRoot,"AppControlManager.Service.exe")}\" start= auto DisplayName= \"AppControl Manager Agent\"");
                 Run("sc.exe","description AppControlManager \"AppControl Manager application-control agent\"");
                 using(var run=Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",true)) run?.SetValue("AppControlManagerTray",$"\"{Path.Combine(ProgramFilesRoot,"AppControlManager.Tray.exe")}\"");
@@ -143,11 +146,27 @@ internal static class Program
                     progress?.Report("Enabling Windows App Control Learning / Audit mode...");
                     Run("powershell.exe",$"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{Path.Combine(ProgramFilesRoot,"Scripts","Start-LearningMode.ps1")}\" -NoTaskControl",timeoutMs:180000);
                 }
-                progress?.Report("Starting AppControl Manager Agent...");
+                progress?.Report("Starting AppControl Manager services...");
+                Run("sc.exe","start AppControlManagerRuleWorker");
                 Run("sc.exe","start AppControlManager");
                 try { Process.Start(new ProcessStartInfo(Path.Combine(ProgramFilesRoot,"AppControlManager.Tray.exe")){UseShellExecute=true}); } catch { }
             }
             finally { try { Directory.Delete(temp,true); } catch { } }
+        }
+
+        private static void SecureRuleWorkerDirectory()
+        {
+            var root=Path.Combine(ProgramDataRoot,"RuleWorker");
+            Run("icacls.exe",$"\"{root}\" /inheritance:r");
+            Run("icacls.exe",$"\"{root}\" /grant:r \"*S-1-5-18:(OI)(CI)(F)\"");
+            Run("icacls.exe",$"\"{root}\" /grant:r \"*S-1-5-32-544:(OI)(CI)(F)\"");
+            Run("icacls.exe",$"\"{root}\" /grant:r \"*S-1-5-19:(OI)(CI)(M)\"");
+        }
+        private static void EnsureRuleWorkerService()
+        {
+            var serviceExe=Path.Combine(ProgramFilesRoot,"AppControlManager.Service.exe");
+            Run("sc.exe",$"create AppControlManagerRuleWorker binPath= \"\\\"{serviceExe}\\\" --rule-worker\" start= auto obj= \"NT AUTHORITY\\LocalService\" DisplayName= \"AppControl Manager Rule Worker\"");
+            Run("sc.exe","description AppControlManagerRuleWorker \"AppControl Manager generation-only ConfigCI worker running as Local Service\"");
         }
 
         private static void ValidatePayload(string payload)

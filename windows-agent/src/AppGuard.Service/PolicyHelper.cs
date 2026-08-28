@@ -12,17 +12,19 @@ public sealed class PolicyHelper
     private readonly FileLogger _log;
     private readonly PolicyProgressTracker _progress;
     private readonly BackgroundPolicyStore _backgroundStore;
+    private readonly RuleWorkerClient _ruleWorker;
     private readonly ConcurrentDictionary<string, PublisherCacheEntry> _publisherCache = new(StringComparer.OrdinalIgnoreCase);
     private const int PublisherCacheLimit = 5000;
     private readonly SemaphoreSlim _policyGenerationGate = new(1, 1);
     private volatile int _foregroundWaiters;
     public bool ForegroundPending => Volatile.Read(ref _foregroundWaiters) > 0;
 
-    public PolicyHelper(FileLogger log, PolicyProgressTracker progress, BackgroundPolicyStore backgroundStore)
+    public PolicyHelper(FileLogger log, PolicyProgressTracker progress, BackgroundPolicyStore backgroundStore, RuleWorkerClient ruleWorker)
     {
         _log = log;
         _progress = progress;
         _backgroundStore = backgroundStore;
+        _ruleWorker = ruleWorker;
     }
 
     public Task<SupplementalResult> ApproveFileAsync(string filePath, long requestId, CancellationToken ct)
@@ -413,14 +415,8 @@ public sealed class PolicyHelper
         Directory.CreateDirectory(AppGuardPaths.RuleFragmentDirectory);
         var safe = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rule.CacheKey))).Substring(0, 24);
         var outputPath = Path.Combine(AppGuardPaths.RuleFragmentDirectory, safe + ".xml");
-        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "New-RuleFragment.ps1");
-        var args = $"-Kind {Quote(rule.Kind)} -FilePath {Quote(rule.RepresentativePath)} -OutputPath {Quote(outputPath)} -Json";
         var started = DateTimeOffset.UtcNow;
-        var output = await RunPowerShellAsync(script, args, ct);
-        var line = output.Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault(x => x.TrimStart().StartsWith("{"));
-        if (line is null) throw new InvalidOperationException("Rule fragment helper did not return JSON. Output: " + output);
-        var result = JsonSerializer.Deserialize<BackgroundRuleFragmentResult>(line, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-                     ?? throw new InvalidOperationException("Could not parse rule fragment helper result.");
+        var result = await _ruleWorker.GenerateAsync(rule.Kind, rule.RepresentativePath, outputPath, ct);
         if (result.ElapsedSeconds <= 0) result.ElapsedSeconds = (DateTimeOffset.UtcNow - started).TotalSeconds;
         return result;
     }

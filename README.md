@@ -1,5 +1,13 @@
-# AppControl Manager 0.16.4
+# AppControl Manager 0.16.5
 
+
+## 0.16.5 Local Service ConfigCI rule worker
+
+Version 0.16.5 moves Path B background and learned rule-fragment generation out of the LocalSystem agent process and into a dedicated **AppControl Manager Rule Worker** Windows service running as `NT AUTHORITY\LocalService`. Endpoint diagnostics showed that the same Chrome ProductName `New-CIPolicyRule` call succeeds for an elevated administrator and Local Service but fails under LocalSystem with `An item with the same key has already been added.` The main agent remains LocalSystem and is still the only component that merges, installs, removes, or verifies WDAC policies.
+
+The worker reuses the existing signed `AppControlManager.Service.exe` with `--rule-worker`, consumes tightly constrained jobs under `C:\ProgramData\AppControlManager\RuleWorker`, and generates XML fragments only. The main service stages a copy of each representative file so Local Service does not need broad access to user/application directories. No additional signed executable is introduced.
+
+This release intentionally does not change temporary `.net` learned-file classification, foreground primary approval/deny generation, or the server Enable Enforcement redirect; those are separate follow-ups. **AppControl Manager 0.16.2 remains the rollback/reference baseline for the Path B architecture.**
 
 ## 0.16.4 ConfigCI rule-fragment binding fix
 
@@ -31,7 +39,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.4`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.5`:
 
 ```text
 AZURE_CLIENT_ID

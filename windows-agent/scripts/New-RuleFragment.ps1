@@ -6,7 +6,6 @@ param(
 )
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1"
-Assert-Administrator
 $resolved=Resolve-CIFilePath $FilePath
 if(-not (Test-Path -LiteralPath $resolved -PathType Leaf)){ throw "Rule-fragment source file does not exist: $FilePath" }
 $timer=[Diagnostics.Stopwatch]::StartNew()

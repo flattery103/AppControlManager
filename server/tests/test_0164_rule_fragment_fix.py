@@ -14,19 +14,7 @@ class RuleFragmentFixTests(unittest.TestCase):
 
 
 class Release0164Tests(unittest.TestCase):
-    VERSION = '0.16.4'
-
-    def test_release_surfaces_move_to_0164_and_document_fragment_binding_fix(self):
-        app = (ROOT / 'server' / 'app.py').read_text(encoding='utf-8')
-        build = (ROOT / 'windows-agent' / 'Build.ps1').read_text(encoding='utf-8')
-        self.assertIn(f'version="{self.VERSION}"', app)
-        self.assertIn(f"[string]$Version='{self.VERSION}'", build)
-        for rel in (
-            'windows-agent/src/AppGuard.Service/AppGuard.Service.csproj',
-            'windows-agent/src/AppGuard.Tray/AppGuard.Tray.csproj',
-            'windows-agent/src/AppControlManager.Installer/AppControlManager.Installer.csproj',
-        ):
-            self.assertIn(f'<Version>{self.VERSION}</Version>', (ROOT / rel).read_text(encoding='utf-8'), rel)
+    def test_release_notes_preserve_0164_fragment_binding_fix_and_rollback_baseline(self):
         fixes = ROOT / '0.16.4-FIXES.txt'
         self.assertTrue(fixes.is_file())
         text = fixes.read_text(encoding='utf-8')

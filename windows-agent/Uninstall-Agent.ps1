@@ -1,4 +1,6 @@
 $ErrorActionPreference='SilentlyContinue'
+Stop-Service AppControlManagerRuleWorker -Force
+sc.exe delete AppControlManagerRuleWorker | Out-Null
 Stop-Service AppControlManager -Force
 sc.exe delete AppControlManager | Out-Null
 Stop-Service AppGuardPOC -Force

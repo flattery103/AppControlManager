@@ -7,6 +7,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 $serviceName='AppControlManager'
+$ruleWorkerServiceName='AppControlManagerRuleWorker'
 $programFiles='C:\Program Files\AppControlManager'
 $programData='C:\ProgramData\AppControlManager'
 $trayExe=Join-Path $programFiles 'AppControlManager.Tray.exe'
@@ -69,6 +70,26 @@ function Start-InteractiveTray {
     }
     return $false
 }
+function Ensure-RuleWorker {
+    $root=Join-Path $programData 'RuleWorker'
+    $jobs=Join-Path $root 'Jobs'
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    & icacls.exe $root '/inheritance:r' | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Could not disable RuleWorker ACL inheritance." }
+    foreach($grant in @('*S-1-5-18:(OI)(CI)(F)','*S-1-5-32-544:(OI)(CI)(F)','*S-1-5-19:(OI)(CI)(M)')) {
+        & icacls.exe $root '/grant:r' $grant | Out-Null
+        if($LASTEXITCODE -ne 0){ throw "Could not secure AppControl Manager RuleWorker directory." }
+    }
+    New-Item -ItemType Directory -Path $jobs -Force | Out-Null
+    $workerBin='"C:\Program Files\AppControlManager\AppControlManager.Service.exe" --rule-worker'
+    if(Get-Service -Name $ruleWorkerServiceName -ErrorAction SilentlyContinue) {
+        & sc.exe config $ruleWorkerServiceName binPath= $workerBin start= auto obj= 'NT AUTHORITY\LocalService' DisplayName= 'AppControl Manager Rule Worker' | Out-Null
+    } else {
+        & sc.exe create $ruleWorkerServiceName binPath= $workerBin start= auto obj= 'NT AUTHORITY\LocalService' DisplayName= 'AppControl Manager Rule Worker' | Out-Null
+    }
+    if($LASTEXITCODE -ne 0){ throw "Could not create/configure AppControl Manager Rule Worker service." }
+    & sc.exe description $ruleWorkerServiceName 'AppControl Manager generation-only ConfigCI worker running as Local Service' | Out-Null
+}
 function Wait-ServiceStable([int]$Seconds=30) {
     $deadline=(Get-Date).AddSeconds($Seconds)
     do {
@@ -95,6 +116,7 @@ try {
     # Closing the tray avoids an executable file lock. The Run registry entry remains in place,
     # and we also make a best-effort interactive relaunch after the update.
     Stop-Process -Name 'AppControlManager.Tray' -Force -ErrorAction SilentlyContinue
+    Stop-Service -Name $ruleWorkerServiceName -Force -ErrorAction SilentlyContinue
     Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 
@@ -104,6 +126,8 @@ try {
     Copy-Item -Path (Join-Path $StagingPath 'scripts\*.ps1') -Destination (Join-Path $programFiles 'Scripts') -Force
     Copy-Item -Path (Join-Path $StagingPath 'scripts\*.ps1') -Destination $programData -Force
 
+    Ensure-RuleWorker
+    Start-Service -Name $ruleWorkerServiceName
     Start-Service -Name $serviceName
     if(-not (Wait-ServiceStable 35)){ throw "Replacement AppControl Manager service did not remain running." }
 
@@ -118,12 +142,19 @@ try {
 catch {
     $failure=$_.Exception.Message
     try {
+        Stop-Service -Name $ruleWorkerServiceName -Force -ErrorAction SilentlyContinue
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
         $saved=Join-Path $backup 'AppControlManager'
         if(Test-Path -LiteralPath $saved) {
             Remove-Item -LiteralPath $programFiles -Recurse -Force -ErrorAction SilentlyContinue
             Copy-Item -LiteralPath $saved -Destination $programFiles -Recurse -Force
+        }
+        if(([version]$CurrentVersion) -ge ([version]'0.16.5')) {
+            Ensure-RuleWorker
+            Start-Service -Name $ruleWorkerServiceName -ErrorAction Stop
+        } else {
+            & sc.exe delete $ruleWorkerServiceName | Out-Null
         }
         Start-Service -Name $serviceName -ErrorAction Stop
         $rollbackOk=Wait-ServiceStable 25

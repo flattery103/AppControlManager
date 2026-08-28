@@ -1,0 +1,25 @@
+AppControl Manager 0.16.5
+=========================
+
+Local Service ConfigCI rule worker
+----------------------------------
+
+- Route Path B background bundle and learned-baseline rule fragment generation through a dedicated AppControl Manager Rule Worker Windows service running as NT AUTHORITY\LocalService. Endpoint diagnostics proved that the same Chrome ProductName New-CIPolicyRule operation succeeds for an elevated administrator and Local Service but fails under LocalSystem with "An item with the same key has already been added."
+- Keep the main AppControlManager service running as LocalSystem. It remains responsible for server communication, command processing, policy merge/install/remove, updates, state, and all privileged WDAC changes.
+- Reuse the already signed AppControlManager.Service.exe for the worker by registering it a second time with --rule-worker. No additional executable or Artifact Signing asset is introduced.
+- Stage each representative file into a locked-down C:\ProgramData\AppControlManager\RuleWorker\Jobs job directory, allowing Local Service to read only the copy required for ConfigCI generation. Worker requests accept only product/hash kinds and a fixed staged input filename; worker output is fixed to fragment.xml.
+- Remove the administrator assertion from generation-only New-RuleFragment.ps1. Scripts that install, remove, convert/install, or otherwise change WDAC policy state retain their administrator boundary.
+- Provision and repair the Rule Worker automatically from the 0.16.5 main service so a managed update from 0.16.4 can create the new worker even though the activation helper that launches the update is still the 0.16.4 copy. First-install/manual-upgrade/update/uninstall paths also manage the worker lifecycle and secured ACL.
+- Preserve fail-closed Enable Enforcement behavior: if required rule fragments cannot be prepared, the endpoint remains in Learning instead of switching with partial coverage.
+
+Scope intentionally deferred
+----------------------------
+
+- Temporary .NET single-file extraction paths under %TEMP%\.net still need a separate learned-application classification decision; 0.16.5 does not change that behavior.
+- The server Enable Enforcement form still redirects to the dashboard; returning to the current device detail page is a separate server UI fix.
+- Foreground primary approval and deny-policy generation remain on their existing paths in this release. 0.16.5 specifically addresses background/learned fragment generation that blocked Enable Enforcement.
+
+Rollback
+--------
+
+Keep AppControl Manager 0.16.2 as the rollback/reference baseline for the Path B architecture. If the 0.16.5 worker boundary does not resolve enforcement preparation reliably, stop rollout and return development to the retained 0.16.2 architecture baseline rather than stacking additional unverified execution-context workarounds.
