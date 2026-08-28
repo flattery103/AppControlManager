@@ -204,8 +204,8 @@ public sealed class LocalRequestServer
             var original=DevicePathResolver.Resolve(chosen.OriginalPath) ?? chosen.OriginalPath;
             var source=File.Exists(original) ? original : (chosen.CachedPath is not null && File.Exists(chosen.CachedPath) ? chosen.CachedPath : null);
             if (source is null) return new PipeResponse { Ok=false, Message="The installer disappeared before AppControl Manager could preserve it." };
-            var meta=FileMetadataReader.Read(source);
-            var result=await _api.RequestInstallationAsync(new ApprovalRequest { FilePath=original, PolicySourcePath=string.Equals(source,original,StringComparison.OrdinalIgnoreCase)?null:source, Sha256=meta.Sha256??chosen.Sha256, Publisher=meta.Publisher??chosen.Publisher, ProductName=meta.ProductName??chosen.ProductName, FileVersion=meta.FileVersion??chosen.FileVersion, Reason=req.Reason, RequestedBy=req.RequestedBy },ct);
+            var installationMeta=FileMetadataReader.Read(source);
+            var result=await _api.RequestInstallationAsync(new ApprovalRequest { FilePath=original, PolicySourcePath=string.Equals(source,original,StringComparison.OrdinalIgnoreCase)?null:source, Sha256=installationMeta.Sha256??chosen.Sha256, Publisher=installationMeta.Publisher??chosen.Publisher, ProductName=installationMeta.ProductName??chosen.ProductName, FileVersion=installationMeta.FileVersion??chosen.FileVersion, Reason=req.Reason, RequestedBy=req.RequestedBy },ct);
             return new PipeResponse { Ok=result.Ok, InstallationId=result.InstallationId, RequestStatus=result.Status, Duplicate=result.Duplicate, Message=result.Duplicate ? $"Installation request {result.InstallationId} already exists and is {result.Status}." : $"Installation request {result.InstallationId} submitted." };
         }
 
