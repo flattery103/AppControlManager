@@ -61,6 +61,7 @@ if($AlreadyExpanded) {
 if($policyFiles.Count -eq 0) { throw 'No files were available for App Control rule generation.' }
 
 $policyFileArray=@($policyFiles | ForEach-Object { [string]$_ })
+$ruleTimer=[System.Diagnostics.Stopwatch]::StartNew()
 $rules=@()
 try {
     # Generate real per-binary FilePublisher rules in one pass. This is more reliable on current
@@ -76,7 +77,10 @@ try {
     }
 }
 if($rules.Count -eq 0) { throw 'No App Control allow rules could be generated.' }
+$ruleTimer.Stop()
+Write-Output ("ACM_STAGE rule-generation elapsed={0:F1}s files={1} rules={2}" -f $ruleTimer.Elapsed.TotalSeconds,$policyFiles.Count,$rules.Count)
 
+$xmlTimer=[System.Diagnostics.Stopwatch]::StartNew()
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmssfff'
 $xml=Join-Path $script:PolicyDir ("Supplemental-$stamp.xml")
 New-CIPolicy -MultiplePolicyFormat -FilePath $xml -Rules $rules -UserPEs | Out-Null
@@ -84,12 +88,20 @@ Set-CIPolicyIdInfo -FilePath $xml -PolicyName $Name -ResetPolicyID | Out-Null
 Set-CIPolicyIdInfo -FilePath $xml -SupplementsBasePolicyID ([guid]$state.base_policy_id) | Out-Null
 Set-CIPolicyVersion -FilePath $xml -Version '1.0.0.0'
 $id=Get-CIPolicyGuid $xml
+$xmlTimer.Stop()
+Write-Output ("ACM_STAGE policy-xml elapsed={0:F1}s policy={1}" -f $xmlTimer.Elapsed.TotalSeconds,$id)
+$convertTimer=[System.Diagnostics.Stopwatch]::StartNew()
 $cip=Join-Path $script:PolicyDir ($id + '.cip')
 ConvertFrom-CIPolicy $xml $cip | Out-Null
+$convertTimer.Stop()
+Write-Output ("ACM_STAGE policy-convert elapsed={0:F1}s policy={1}" -f $convertTimer.Elapsed.TotalSeconds,$id)
+$installTimer=[System.Diagnostics.Stopwatch]::StartNew()
 CiTool.exe --update-policy $cip -json | Out-Null
 if($LASTEXITCODE -ne 0){ throw "CiTool policy update failed with exit code $LASTEXITCODE" }
 CiTool.exe --refresh -json | Out-Null
 if($LASTEXITCODE -ne 0){ throw "CiTool refresh failed with exit code $LASTEXITCODE" }
+$installTimer.Stop()
+Write-Output ("ACM_STAGE policy-install elapsed={0:F1}s policy={1}" -f $installTimer.Elapsed.TotalSeconds,$id)
 if($AsObject -or $Json) {
     $meta=Get-FileMetadata $requested[0]
     $detected=Get-SupplementalRuleType $xml

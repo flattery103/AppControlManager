@@ -327,7 +327,9 @@ public sealed class PolicyHelper
     public async Task EnableEnforcementAsync(CancellationToken ct)
     {
         var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "End-LearningAndEnforce.ps1");
+        _log.Write("enforcement-progress started");
         await RunPowerShellAsync(script, "-NoTaskControl", ct);
+        _log.Write("enforcement-progress completed");
     }
 
     private async Task<string> RunPowerShellAsync(string script, string args, CancellationToken ct)
@@ -343,14 +345,23 @@ public sealed class PolicyHelper
             CreateNoWindow = true
         };
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("Could not start PowerShell policy helper.");
-        var stdoutTask = p.StandardOutput.ReadToEndAsync(ct);
+        var stdout = new StringBuilder();
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
+        while (true)
+        {
+            var line = await p.StandardOutput.ReadLineAsync(ct);
+            if (line is null) break;
+            if (IsPolicyHelperNoise(line)) continue;
+            stdout.AppendLine(line);
+            if (line.StartsWith("ACM_STAGE", StringComparison.OrdinalIgnoreCase))
+                _log.Write("policy-helper " + line);
+        }
         await p.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
         var stderr = await stderrTask;
-        if (p.ExitCode != 0) throw new InvalidOperationException($"Policy helper failed ({p.ExitCode}): {stderr}\n{stdout}".Trim());
+        var stdoutText = stdout.ToString();
+        if (p.ExitCode != 0) throw new InvalidOperationException($"Policy helper failed ({p.ExitCode}): {stderr}\n{stdoutText}".Trim());
         if (!string.IsNullOrWhiteSpace(stderr)) _log.Write("policy-helper stderr: " + stderr.Trim());
-        return stdout;
+        return stdoutText;
     }
 
     private async Task<string> RunPowerShellCommandAsync(string command, CancellationToken ct)
@@ -368,12 +379,18 @@ public sealed class PolicyHelper
         var stdoutTask = p.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
-        var stdout = await stdoutTask;
+        var stdout = CleanPolicyHelperOutput(await stdoutTask);
         var stderr = await stderrTask;
         if (p.ExitCode != 0) throw new InvalidOperationException($"Policy helper failed ({p.ExitCode}): {stderr}\n{stdout}".Trim());
         if (!string.IsNullOrWhiteSpace(stderr)) _log.Write("policy-helper stderr: " + stderr.Trim());
         return stdout;
     }
+
+    private static bool IsPolicyHelperNoise(string? line)
+        => string.Equals(line?.Trim(), "Scan completed successfully", StringComparison.OrdinalIgnoreCase);
+
+    private static string CleanPolicyHelperOutput(string output)
+        => string.Join(Environment.NewLine, output.Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries).Where(line => !IsPolicyHelperNoise(line)));
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 

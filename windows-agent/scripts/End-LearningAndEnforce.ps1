@@ -2,6 +2,7 @@ param([switch]$NoTaskControl)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1"
 Assert-Administrator
+$totalTimer=[System.Diagnostics.Stopwatch]::StartNew()
 
 $task = Get-ScheduledTask -TaskName 'AppGuard POC Agent' -ErrorAction SilentlyContinue
 $restartAgent = (-not $NoTaskControl) -and ($null -ne $task)
@@ -15,14 +16,24 @@ try {
     if (!$state.base_policy_id) { throw 'Base policy has not been created.' }
     if (!$state.learning_started) { throw 'Learning mode has not been started.' }
 
+    $collectTimer=[System.Diagnostics.Stopwatch]::StartNew()
     $learned=@(& "$PSScriptRoot\Get-LearnedApplications.ps1" -Save)
-    if($learned.Count -gt 0) {
-        $paths=@($learned | ForEach-Object { $_.file_path } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if($paths.Count -gt 0) {
-            & "$PSScriptRoot\New-SupplementalForFiles.ps1" -FilePath $paths -Name 'AppControl Manager Learned Baseline' | Out-Null
+    $collectTimer.Stop()
+    Write-Output ("ACM_STAGE learned-collection elapsed={0:F1}s learned={1}" -f $collectTimer.Elapsed.TotalSeconds,$learned.Count)
+
+    $dedupTimer=[System.Diagnostics.Stopwatch]::StartNew()
+    $paths=@($learned | ForEach-Object { $_.file_path } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -Unique)
+    $dedupTimer.Stop()
+    Write-Output ("ACM_STAGE learned-dedup elapsed={0:F1}s learned={1} unique={2}" -f $dedupTimer.Elapsed.TotalSeconds,$learned.Count,$paths.Count)
+    if($paths.Count -gt 0) {
+        # These paths already came from actual Code Integrity learning events. Do not recursively
+        # rediscover each application's Program Files tree again during the mode transition.
+        & "$PSScriptRoot\New-SupplementalForFiles.ps1" -FilePath $paths -Name 'AppControl Manager Learned Baseline' -AlreadyExpanded | ForEach-Object {
+            if(([string]$_).StartsWith('ACM_STAGE')) { Write-Output ([string]$_) }
         }
     }
 
+    $baseTimer=[System.Diagnostics.Stopwatch]::StartNew()
     $xml=Join-Path $script:PolicyDir 'BasePolicy.xml'
     # POC safety: enforce EXE/DLL allowlisting, but do not enforce scripts yet.
     # The current management layer is unsigned PowerShell and must remain runnable.
@@ -35,10 +46,14 @@ try {
     CiTool.exe --update-policy $cip -json | Out-Null
     CiTool.exe --refresh -json | Out-Null
 
+    $baseTimer.Stop()
+    Write-Output ("ACM_STAGE base-enforcement elapsed={0:F1}s version={1}" -f $baseTimer.Elapsed.TotalSeconds,$next)
     Update-State -Fields @{ learning_mode=$false; policy_version=$next } | Out-Null
     Write-Host "Enforcement enabled. Learned files processed: $($learned.Count)" -ForegroundColor Green
     Write-Host 'Unknown applications should now generate Code Integrity Event ID 3077 and be blocked.'
     Write-Host 'POC safety: PowerShell/script enforcement remains disabled (rule option 11).' -ForegroundColor Yellow
+    $totalTimer.Stop()
+    Write-Output ("ACM_STAGE enforcement-total elapsed={0:F1}s learned={1} unique={2}" -f $totalTimer.Elapsed.TotalSeconds,$learned.Count,$paths.Count)
 } finally {
     if ($restartAgent) {
         try { Start-ScheduledTask -TaskName 'AppGuard POC Agent' -ErrorAction SilentlyContinue } catch {}

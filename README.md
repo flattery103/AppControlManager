@@ -1,4 +1,9 @@
-# AppControl Manager 0.16.0
+# AppControl Manager 0.16.1
+
+
+## 0.16.1 enforcement-performance and reliability update
+
+Version 0.16.1 fixes the Learning to Enforcement transition so observed learned files are deduplicated and passed directly to policy generation without recursively rediscovering each application tree. The Windows agent now keeps an independent heartbeat/event loop while long policy commands execute, preventing healthy endpoints from appearing Offline during enforcement or approval operations. Policy helpers emit policy stage timing diagnostics and suppress repeated ConfigCI `Scan completed successfully` noise. The server GUI updater now uses `systemd-run --no-block` so a successful self-update is not misreported as a launch failure.
 
 ## 0.16.0 approval-performance and upgrade-compatibility milestone
 
@@ -12,7 +17,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.0`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.1`:
 
 ```text
 AZURE_CLIENT_ID

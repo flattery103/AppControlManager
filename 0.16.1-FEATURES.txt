@@ -1,0 +1,20 @@
+AppControl Manager 0.16.1
+
+Learning to Enforcement performance
+- Learned Code Integrity paths are normalized/deduplicated once and passed directly to the supplemental policy helper with -AlreadyExpanded.
+- The mode transition no longer recursively rediscovers every learned application tree.
+
+Agent availability
+- Adds an independent heartbeat/event/tray maintenance loop separate from the command loop.
+- Long WDAC policy commands no longer make a healthy endpoint appear Offline simply because command processing is busy.
+
+Diagnostics
+- Adds policy stage timing for rule generation, policy XML creation, conversion, installation, learned collection, and total enforcement time.
+- Filters repetitive ConfigCI "Scan completed successfully" output from agent-service.log.
+
+Server updater
+- GUI self-update handoff now uses systemd-run --no-block to avoid false launch-failure responses during a successful restart.
+
+Windows agent update: YES
+Server update: YES
+Manual agent upload: NO when the matching GitHub release is imported automatically.

@@ -7,7 +7,7 @@ namespace AppGuard.Service;
 
 public sealed class AgentWorker : BackgroundService
 {
-    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.0";
+    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.16.1";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;
@@ -27,15 +27,26 @@ public sealed class AgentWorker : BackgroundService
     {
         _log.Write($"agent-start version={Version} pid={Environment.ProcessId}");
         var pipeTask = _pipe.RunAsync(stoppingToken);
+        var maintenanceTask = RunMaintenanceLoopAsync(stoppingToken);
+        var commandTask = RunCommandLoopAsync(stoppingToken);
+        try
+        {
+            await Task.WhenAll(maintenanceTask, commandTask, pipeTask);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        _log.Write("agent-stop");
+    }
+
+    private async Task RunMaintenanceLoopAsync(CancellationToken stoppingToken)
+    {
         while (!stoppingToken.IsCancellationRequested)
         {
             _loop++;
             try { await HeartbeatAsync(stoppingToken); } catch (Exception ex) { _log.Write("heartbeat: " + ex.Message); }
             try { await UploadEventsAsync(stoppingToken); } catch (Exception ex) { _log.Write("events: " + ex.Message); }
-            try { await ProcessCommandsAsync(stoppingToken); } catch (Exception ex) { _log.Write("commands: " + ex.Message); }
-            // The updater must stop the interactive tray while replacing its executable.
-            // Recover it immediately after the replacement service starts, then retry during
-            // the first minute before falling back to the normal five-minute health check.
+            // Long policy commands run on a separate command loop. Keep heartbeat, event upload,
+            // and tray recovery alive so a healthy endpoint never appears Offline while Windows
+            // App Control is building or installing a policy.
             if (_loop <= 4 || _loop % 20 == 0)
             {
                 try { await EnsureInteractiveTrayAsync(stoppingToken); }
@@ -44,8 +55,16 @@ public sealed class AgentWorker : BackgroundService
             try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
         }
-        try { await pipeTask; } catch (OperationCanceledException) { }
-        _log.Write("agent-stop");
+    }
+
+    private async Task RunCommandLoopAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try { await ProcessCommandsAsync(stoppingToken); } catch (Exception ex) { _log.Write("commands: " + ex.Message); }
+            try { await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+        }
     }
 
     private async Task HeartbeatAsync(CancellationToken ct)
