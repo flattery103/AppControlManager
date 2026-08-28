@@ -43,6 +43,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(package, installer_sign)
         self.assertLess(installer_sign, publish)
 
+    def test_release_workflow_uploads_signed_assets_when_release_already_exists(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        publish = text[text.index("- name: Publish GitHub Release"):]
+        self.assertIn("gh release view", publish)
+        self.assertIn("gh release upload", publish)
+        self.assertIn("--clobber", publish)
+        self.assertIn("gh release edit", publish)
+
     def test_windows_ci_uses_node24_generation_actions(self):
         text = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
         self.assertIn("actions/checkout@v6", text)
