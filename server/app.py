@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.16.5")
+app = FastAPI(title="AppControl Manager Server", version="0.17.0")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -292,6 +292,30 @@ def init_db():
                 decided_by TEXT,
                 decision_note TEXT
             );
+            CREATE TABLE IF NOT EXISTS installation_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                sha256 TEXT,
+                publisher TEXT,
+                product_name TEXT,
+                file_version TEXT,
+                reason TEXT,
+                requested_by TEXT,
+                source TEXT NOT NULL DEFAULT 'user',
+                status TEXT NOT NULL DEFAULT 'pending',
+                duration_minutes INTEGER,
+                activation_expires_at TEXT,
+                approved_at TEXT,
+                approved_by TEXT,
+                started_at TEXT,
+                ends_at TEXT,
+                completed_at TEXT,
+                decision_note TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_installation_requests_device_status
+                ON installation_requests(device_id,status,id);
             CREATE TABLE IF NOT EXISTS commands (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id TEXT NOT NULL,
@@ -543,6 +567,7 @@ def purge_device_record(conn: sqlite3.Connection, device_id: str):
     conn.execute('DELETE FROM approved_applications WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM blocked_applications WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM approval_requests WHERE device_id=?',(device_id,))
+    conn.execute('DELETE FROM installation_requests WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM events WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM commands WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM agent_update_history WHERE device_id=?',(device_id,))
@@ -782,7 +807,8 @@ def queue_scoped_auto_approval(conn: sqlite3.Connection, device_id: str, req, po
 
 ALLOWED_AGENT_COMMANDS = {
     'approve_file','approve_session','revoke_approval','block_file','unblock_file',
-    'update_agent','uninstall_agent','return_to_learning','enable_enforcement'
+    'update_agent','uninstall_agent','return_to_learning','enable_enforcement',
+    'start_installation_mode','end_installation_mode'
 }
 
 
@@ -821,6 +847,13 @@ def validate_agent_command(command_type: str, payload_text: str) -> Optional[str
         sha=(payload.get('sha256') or '').strip()
         if not re.fullmatch(r'[0-9a-fA-F]{64}',sha): return 'update_agent requires a 64-character SHA256.'
         if not str(payload.get('download_path','')).startswith('/api/agent/releases/'): return 'update_agent download_path is not an AppControl Manager release path.'
+    elif command_type == 'start_installation_mode':
+        if not positive_int('installation_id'): return 'start_installation_mode requires a positive installation_id.'
+        try: duration=int(payload.get('duration_minutes') or 0)
+        except Exception: duration=0
+        if duration < 1 or duration > 240: return 'start_installation_mode duration_minutes must be 1-240.'
+    elif command_type == 'end_installation_mode':
+        if not positive_int('installation_id'): return 'end_installation_mode requires a positive installation_id.'
     return None
 
 
@@ -1219,6 +1252,18 @@ class ApprovalIn(BaseModel):
     requested_by: Optional[str] = None
 
 
+class InstallationStartIn(BaseModel):
+    requested_by: Optional[str] = None
+
+
+class InstallationReportIn(BaseModel):
+    status: str
+    started_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    detail: Optional[str] = None
+
+
 class ApprovalComponentIn(BaseModel):
     file_path: str
     policy_source_path: Optional[str] = None
@@ -1472,7 +1517,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.16.5</div></aside>"
+        + "</div><div class='side-footer'>Server 0.17.0</div></aside>"
     )
 
 
@@ -1870,7 +1915,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.16.5"}
+    return {"ok": True, "version": "0.17.0"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -2139,6 +2184,112 @@ def create_request(req: ApprovalIn, device_id: str = Depends(agent_auth)):
     return {"ok": True, "request_id": request_id, "status": "pending"}
 
 
+def _installation_duration(value: int) -> int:
+    try:
+        duration = int(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Installation Mode duration must be a whole number of minutes.")
+    if duration < 1 or duration > 240:
+        raise HTTPException(status_code=400, detail="Installation Mode duration must be 1-240 minutes.")
+    return duration
+
+
+def _expire_installation_approvals(conn: sqlite3.Connection, device_id: Optional[str] = None):
+    now = utcnow()
+    sql = """UPDATE installation_requests
+             SET status='expired',completed_at=?,decision_note='Approved installation activation window expired before it was started.'
+             WHERE status='approved' AND activation_expires_at IS NOT NULL AND activation_expires_at<=?"""
+    params: list[object] = [now, now]
+    if device_id:
+        sql += " AND device_id=?"
+        params.append(device_id)
+    conn.execute(sql, params)
+
+
+@app.post("/api/installations")
+def create_installation_request(req: ApprovalIn, device_id: str = Depends(agent_auth)):
+    actor=(req.requested_by or "endpoint-user").strip() or "endpoint-user"
+    with db() as conn:
+        _expire_installation_approvals(conn, device_id)
+        device=conn.execute("SELECT * FROM devices WHERE id=?",(device_id,)).fetchone()
+        if not device: raise HTTPException(status_code=404,detail="Device not found")
+        existing=conn.execute("""SELECT * FROM installation_requests WHERE device_id=? AND lower(COALESCE(requested_by,''))=lower(?)
+            AND status IN ('pending','approved','starting','active','ending') ORDER BY id DESC LIMIT 1""",(device_id,actor)).fetchone()
+        if existing:
+            return {"ok":True,"duplicate":True,"installation_id":existing['id'],"status":existing['status']}
+        cur=conn.execute("""INSERT INTO installation_requests(device_id,file_path,sha256,publisher,product_name,file_version,reason,requested_by,source,status,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,'pending',?)""",(device_id,req.file_path,req.sha256,req.publisher,req.product_name,req.file_version,req.reason,actor,'user',utcnow()))
+        iid=cur.lastrowid
+        audit(conn,actor,'installation_requested',organization_id=device['organization_id'],device_id=device_id,object_type='installation_request',object_id=iid,detail=req.file_path)
+    return {"ok":True,"installation_id":iid,"status":"pending"}
+
+
+@app.get("/api/installations")
+def get_installations(requested_by: Optional[str] = None, device_id: str = Depends(agent_auth)):
+    with db() as conn:
+        _expire_installation_approvals(conn, device_id)
+        params:[object]=[device_id]
+        where="device_id=?"
+        if requested_by:
+            where += " AND (lower(COALESCE(requested_by,''))=lower(?) OR source='admin')"
+            params.append(requested_by)
+        rows=conn.execute(f"SELECT * FROM installation_requests WHERE {where} ORDER BY id DESC LIMIT 30",params).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/installations/{installation_id}/start")
+def start_installation_request(installation_id:int, req:InstallationStartIn, device_id:str=Depends(agent_auth)):
+    with db() as conn:
+        _expire_installation_approvals(conn, device_id)
+        row=conn.execute("SELECT * FROM installation_requests WHERE id=? AND device_id=?",(installation_id,device_id)).fetchone()
+        if not row: raise HTTPException(status_code=404,detail="Installation request not found")
+        if row['status']!='approved': raise HTTPException(status_code=409,detail=f"Installation request is {row['status']}, not approved for activation.")
+        actor=(req.requested_by or '').strip()
+        if row['requested_by'] and (not actor or row['requested_by'].lower()!=actor.lower()):
+            raise HTTPException(status_code=403,detail="This installation approval belongs to another endpoint user.")
+        if active_device_command(conn,device_id): raise HTTPException(status_code=409,detail="The device is busy with another AppControl Manager operation.")
+        duration=_installation_duration(row['duration_minutes'] or 15)
+        payload={'installation_id':installation_id,'duration_minutes':duration,'trigger':'user','actor':row['requested_by'] or actor or 'endpoint-user'}
+        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'start_installation_mode',json.dumps(payload),'pending',utcnow()))
+        conn.execute("UPDATE installation_requests SET status='starting',decision_note='User accepted the administrator approval; waiting for the endpoint to enter Installation Mode.' WHERE id=?",(installation_id,))
+        d=conn.execute('SELECT organization_id FROM devices WHERE id=?',(device_id,)).fetchone()
+        audit(conn,actor or 'endpoint-user','installation_activation_requested',organization_id=d['organization_id'] if d else None,device_id=device_id,object_type='installation_request',object_id=installation_id,detail=f'duration={duration}')
+    return {'ok':True,'installation_id':installation_id,'status':'starting'}
+
+
+@app.post("/api/installations/{installation_id}/finish")
+def finish_installation_request(installation_id:int, req:InstallationStartIn, device_id:str=Depends(agent_auth)):
+    with db() as conn:
+        row=conn.execute("SELECT * FROM installation_requests WHERE id=? AND device_id=?",(installation_id,device_id)).fetchone()
+        if not row: raise HTTPException(status_code=404,detail="Installation request not found")
+        if row['status'] not in {'starting','active'}: raise HTTPException(status_code=409,detail=f"Installation request is {row['status']} and cannot be ended.")
+        if active_device_command(conn,device_id): raise HTTPException(status_code=409,detail="The device is busy with another AppControl Manager operation.")
+        payload={'installation_id':installation_id,'reason':'user_finished','actor':(req.requested_by or row['requested_by'] or 'endpoint-user')}
+        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'end_installation_mode',json.dumps(payload),'pending',utcnow()))
+        conn.execute("UPDATE installation_requests SET status='ending',decision_note='Endpoint user requested early completion.' WHERE id=?",(installation_id,))
+    return {'ok':True,'installation_id':installation_id,'status':'ending'}
+
+
+@app.post("/api/installations/{installation_id}/report")
+def report_installation(installation_id:int, req:InstallationReportIn, device_id:str=Depends(agent_auth)):
+    allowed={'starting','active','ending','completed','failed'}
+    status_value=(req.status or '').strip().lower()
+    if status_value not in allowed: raise HTTPException(status_code=400,detail="Invalid installation status report.")
+    with db() as conn:
+        row=conn.execute("SELECT * FROM installation_requests WHERE id=? AND device_id=?",(installation_id,device_id)).fetchone()
+        if not row: raise HTTPException(status_code=404,detail="Installation request not found")
+        completed=req.completed_at or (utcnow() if status_value in {'completed','failed'} else row['completed_at'])
+        conn.execute("""UPDATE installation_requests SET status=?,started_at=COALESCE(?,started_at),ends_at=COALESCE(?,ends_at),completed_at=?,decision_note=COALESCE(?,decision_note) WHERE id=?""",
+                     (status_value,req.started_at,req.ends_at,completed,req.detail,installation_id))
+        d=conn.execute('SELECT organization_id FROM devices WHERE id=?',(device_id,)).fetchone()
+        if status_value == 'active':
+            conn.execute("UPDATE devices SET learning_mode=1,policy_mode='learning' WHERE id=?",(device_id,))
+        elif status_value in {'completed','failed'}:
+            conn.execute("UPDATE devices SET learning_mode=0,policy_mode='enforcement' WHERE id=?",(device_id,))
+        audit(conn,'endpoint','installation_'+status_value,organization_id=d['organization_id'] if d else None,device_id=device_id,object_type='installation_request',object_id=installation_id,detail=req.detail)
+    return {'ok':True}
+
+
 @app.post("/api/requests/session")
 def create_session_request(req: ApprovalSessionIn, device_id: str = Depends(agent_auth)):
     # De-duplicate the component list while preserving the first-seen order.
@@ -2391,6 +2542,15 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
                 "UPDATE devices SET learning_mode=0,policy_mode='enforcement' WHERE id=?",
                 (device_id,),
             )
+
+        if row["command_type"] in {"start_installation_mode","end_installation_mode"}:
+            installation_id=int(payload.get("installation_id") or 0)
+            if installation_id and not req.success:
+                conn.execute(
+                    """UPDATE installation_requests SET status='failed',completed_at=?,decision_note=?
+                       WHERE id=? AND device_id=?""",
+                    (utcnow(), req.result or f"Endpoint command {row['command_type']} failed.", installation_id, device_id),
+                )
 
         if row["command_type"] == "revoke_approval":
             policy_id = normalize_policy_guid(payload.get("policy_id"))
@@ -3195,7 +3355,12 @@ def requests_page(q:str='', request_status:str='', organization_id:str='', reque
         rows=conn.execute(f"""SELECT r.*,d.hostname,d.organization_id,d.group_id,o.name organization_name FROM approval_requests r
             JOIN devices d ON d.id=r.device_id LEFT JOIN organizations o ON o.id=d.organization_id
             WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?""",args+[PAGE_SIZE,(page_num-1)*PAGE_SIZE]).fetchall()
-        orgs=conn.execute('SELECT id,name FROM organizations WHERE status=\'active\' ORDER BY name').fetchall() if principal.can_manage_global else []
+        orgs=conn.execute("SELECT id,name FROM organizations WHERE status='active' ORDER BY name").fetchall() if principal.can_manage_global else []
+        _expire_installation_approvals(conn)
+        install_clause,install_params=visible_device_clause(principal,'d')
+        install_rows=conn.execute(f"""SELECT i.*,d.hostname,d.organization_id,o.name organization_name FROM installation_requests i
+            JOIN devices d ON d.id=i.device_id LEFT JOIN organizations o ON o.id=d.organization_id
+            WHERE {install_clause} ORDER BY CASE i.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'starting' THEN 2 WHEN 'active' THEN 3 ELSE 4 END,i.id DESC LIMIT 50""",install_params).fetchall()
         rendered=[]
         for r in rows:
             status_label=request_status_label(r['status']); cls=request_status_class(r['status'])
@@ -3235,8 +3400,22 @@ def requests_page(q:str='', request_status:str='', organization_id:str='', reque
         org_filter=f"<div class='field'><label>Organization</label><select name='organization_id'>{org_options}</select></div>"
     filters=f"<form class='filters' method='get'><div class='field'><label>Search</label><input name='q' value='{escape(q)}' placeholder='App, device, user, decision'></div>{org_filter}<div class='field'><label>Status</label><select name='request_status'>{status_options}</select></div><div class='field'><label>Type</label><select name='request_kind'>{kind_options}</select></div><div class='field'><label>Period</label><select name='period'>{period_options}</select></div><div class='field'><label>Sort</label><select name='sort'>{sort_options}</select></div><button class='btn-primary'>Filter</button><a href='/requests'><button type='button'>Clear</button></a></form>"
     table=f"<div class='card'><table><tr><th>Application</th><th>Device</th><th>Requested by</th><th>Requested</th><th>Status</th><th>Decision</th><th>Action</th></tr>{''.join(rendered) or '<tr><td colspan=7><div class=\"empty\">No approval requests match these filters.</div></td></tr>'}</table></div>"
+    installation_rendered=[]
+    for i in install_rows:
+        status_text=(i['status'] or 'unknown').replace('_',' ').title()
+        app=escape(i['product_name'] or filename(i['file_path']) or 'Installation request')
+        when=display_time(i['created_at'])
+        action=''
+        if i['status']=='pending' and principal.can_approve:
+            action=f"<div class='action-stack'><form class='actions' method='post' action='/admin/installations/{i['id']}/approve'><label>Minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='installation-durations' style='width:82px'><button class='btn-primary'>Approve Installation</button></form><form method='post' action='/admin/installations/{i['id']}/deny'><button class='btn-danger'>Deny</button></form></div>"
+        elif i['status']=='approved':
+            action=f"<span class='muted'>Approved for {i['duration_minutes'] or 15} minutes. Waiting for the user to click Start Installation.</span>"
+        else:
+            action=f"<span class='muted'>{escape(i['decision_note'] or '')}</span>"
+        installation_rendered.append(f"<tr><td><b>{app}</b><div class='muted'><code>{escape(i['file_path'] or '')}</code></div></td><td><a href='/devices/{i['device_id']}'>{escape(i['hostname'])}</a></td><td>{escape(i['requested_by'] or 'Administrator')}</td><td>{escape(when)}</td><td><span class='badge'>{escape(status_text)}</span></td><td>{action}</td></tr>")
+    installation_panel=f"<datalist id='installation-durations'><option value='15'><option value='30'><option value='60'></datalist><div class='section-head'><h2>Installation Requests</h2><span class='muted'>Admin approval grants a four-hour activation window; the timed Installation Mode starts only when the endpoint user clicks Start Installation.</span></div><div class='card'><table><tr><th>Installer / application</th><th>Device</th><th>Requested by</th><th>Requested</th><th>Status</th><th>Action</th></tr>{''.join(installation_rendered) or '<tr><td colspan=6><div class=empty>No installation requests.</div></td></tr>'}</table></div>"
     params_nav={'q':q,'request_status':request_status,'organization_id':organization_id,'request_kind':request_kind,'period':period,'sort':sort}
-    body=f"{summary}<div class='section-head'><h2>Request Queue & History</h2><span class='muted'>{total} match current filters</span></div>{filters}{table}{pager('/requests',page_num,total,params_nav)}"
+    body=f"{installation_panel}{summary}<div class='section-head'><h2>Request Queue & History</h2><span class='muted'>{total} match current filters</span></div>{filters}{table}{pager('/requests',page_num,total,params_nav)}"
     return page('Approval Requests',body,principal,subtitle='Review active requests and searchable decision history from one queue.',actions="<a class='button' href='/reports/approvals'>Decision Report</a><a class='button' href='/reports/approvals.csv'>Export CSV</a>")
 
 
@@ -3291,6 +3470,8 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         events=conn.execute("SELECT * FROM events WHERE device_id=? ORDER BY id DESC LIMIT 150",(device_id,)).fetchall()
         commands=conn.execute("SELECT * FROM commands WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         audits=conn.execute("SELECT * FROM audit_log WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
+        _expire_installation_approvals(conn,device_id)
+        installation=conn.execute("SELECT * FROM installation_requests WHERE device_id=? ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
         effective=[r for r in conn.execute("SELECT * FROM scoped_policies WHERE active=1 ORDER BY CASE action WHEN 'block' THEN 0 ELSE 1 END,id DESC").fetchall() if device_matches_policy_scope(conn,device_id,r)]
         pol_rows=[]
         for r in effective:
@@ -3332,15 +3513,38 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
             lifecycle_actions += f"<form method='post' action='/admin/devices/{device_id}/delete' onsubmit=\"return confirm('Permanently delete the server record and stored device history for {escape(d['hostname'])}? This cannot be undone.');\"><button class='btn-danger'>Delete Device Record</button></form>"
     lifecycle_panel=f"<div class='panel'><h2>Device Lifecycle</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Offboarding</span><b>{escape((d['offboard_status'] or 'Active').replace('_',' ').title())}</b></div><div class='detail-item'><span class='muted'>Offboarding result</span>{escape(d['offboard_result'] or '')}</div><div class='detail-item'><span class='muted'>Record cleanup</span>{escape(delete_reason)}</div></div><div class='actions'>{lifecycle_actions}</div><p class='muted'>Remote uninstall removes AppControl Manager-managed Windows App Control policies first, then removes the tray, service, program files and local AppControl Manager data. Stale server records can be deleted after {STALE_DEVICE_DAYS} days without a check-in, or immediately after successful offboarding.</p></div>"
     mode_name=display_mode(d)
+    install_status=(installation['status'] if installation else '') or ''
+    installation_busy=install_status in {'starting','active','ending'}
     mode_action=''
-    if principal.can_approve and (d['offboard_status'] or '').lower() not in {'queued','uninstalling','completed'}:
+    if principal.can_approve and not installation_busy and (d['offboard_status'] or '').lower() not in {'queued','uninstalling','completed'}:
         if mode_name=='Learning':
             mode_action=f"<form method='post' action='/admin/devices/{device_id}/enforcement'><button class='btn-primary'>Enable Enforcement</button></form>"
         else:
             mode_action=f"<form method='post' action='/admin/devices/{device_id}/learning'><button>Return to Learning</button></form>"
+    installation_controls=''
+    installation_banner=''
+    if principal.can_approve and (d['offboard_status'] or '').lower() not in {'queued','uninstalling','completed'}:
+        if installation_busy:
+            ends=installation['ends_at'] or ''
+            if install_status == 'active':
+                headline='INSTALLATION MODE ACTIVE'
+                countdown=(f"<div id='installation-countdown' data-ends='{escape(ends)}'></div>" if ends else "<div class='muted'>Waiting for the endpoint to report the active timer.</div>")
+            elif install_status == 'starting':
+                headline='INSTALLATION MODE STARTING'
+                countdown="<div class='muted'>Enforcement remains active until the endpoint confirms the installation window has started.</div>"
+            else:
+                headline='INSTALLATION MODE FINALIZING'
+                countdown="<div class='muted'>The endpoint is finalizing learned changes and restoring Enforcement.</div>"
+            end_action=(f"<form method='post' action='/admin/devices/{device_id}/installation-mode/end'><button class='btn-warning'>End Installation Mode Now</button></form>" if install_status in {'starting','active'} else '')
+            installation_banner=f"<div class='notice-info'><b>{headline}</b><div>Session #{installation['id']} · {installation['duration_minutes'] or 15} minute window · status {escape(install_status.title())}</div>{countdown}{end_action}</div>"
+        elif mode_name!='Learning':
+            installation_controls=f"<form class='actions' method='post' action='/admin/devices/{device_id}/installation-mode/start'><label>Installation Mode minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='device-installation-durations' style='width:82px'><datalist id='device-installation-durations'><option value='15'><option value='30'><option value='60'></datalist><button class='btn-primary'>Start Installation Mode</button></form>"
     status_online=bool(d['last_seen'] and d['last_seen']>=(datetime.now(timezone.utc)-timedelta(minutes=10)).isoformat())
     status_badge=f"<span class='badge {'badge-ok' if status_online else 'badge-warn'}'>{'Online' if status_online else 'Offline'}</span>"
-    control_panel=f"<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Connectivity</span>{status_badge}</div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}</div>"
+    control_panel=f"{installation_banner}<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Connectivity</span>{status_badge}</div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}{installation_controls}</div>"
+    if installation and installation['ends_at'] and install_status == 'active':
+        control_panel += "<script>(function(){const e=document.getElementById('installation-countdown');if(!e)return;const end=Date.parse(e.dataset.ends);function tick(){const ms=Math.max(0,end-Date.now());const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);e.textContent='Time remaining: '+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}tick();setInterval(tick,1000);})();</script>"
+    # control_panel is assembled above with installation controls.
 
     background_pending=int(d['background_policy_pending'] or 0)
     background_failed=int(d['background_policy_failed'] or 0)
@@ -4616,6 +4820,79 @@ def unblock(block_id:int, principal:Principal=Depends(admin_auth)):
 
 
 
+
+
+@app.post("/admin/installations/{installation_id}/approve")
+def approve_installation(installation_id:int, duration_minutes:int=Form(15), principal:Principal=Depends(admin_auth)):
+    require_approver(principal)
+    duration=_installation_duration(duration_minutes)
+    with db() as conn:
+        _expire_installation_approvals(conn)
+        row=conn.execute("""SELECT i.*,d.organization_id FROM installation_requests i JOIN devices d ON d.id=i.device_id WHERE i.id=?""",(installation_id,)).fetchone()
+        if not row: raise HTTPException(status_code=404,detail="Installation request not found")
+        require_org_access(principal,row['organization_id'])
+        if row['status']!='pending': raise HTTPException(status_code=409,detail=f"Installation request is {row['status']}, not pending.")
+        approved_at=utcnow()
+        expires=(datetime.fromisoformat(approved_at)+timedelta(hours=4)).isoformat()
+        conn.execute("""UPDATE installation_requests SET status='approved',duration_minutes=?,approved_at=?,approved_by=?,activation_expires_at=?,decision_note=? WHERE id=?""",
+                     (duration,approved_at,principal.username,expires,f"Approved for a {duration}-minute Installation Mode activation window. User must start within four hours.",installation_id))
+        audit(conn,principal.username,'installation_approved',organization_id=row['organization_id'],device_id=row['device_id'],object_type='installation_request',object_id=installation_id,detail=f'duration={duration}; activation_expires_at={expires}')
+    return RedirectResponse('/requests',status_code=303)
+
+
+@app.post("/admin/installations/{installation_id}/deny")
+def deny_installation(installation_id:int, decision_note:str=Form(''), principal:Principal=Depends(admin_auth)):
+    require_approver(principal)
+    with db() as conn:
+        row=conn.execute("""SELECT i.*,d.organization_id FROM installation_requests i JOIN devices d ON d.id=i.device_id WHERE i.id=?""",(installation_id,)).fetchone()
+        if not row: raise HTTPException(status_code=404,detail="Installation request not found")
+        require_org_access(principal,row['organization_id'])
+        if row['status']!='pending': raise HTTPException(status_code=409,detail=f"Installation request is {row['status']}, not pending.")
+        conn.execute("UPDATE installation_requests SET status='denied',completed_at=?,approved_by=?,decision_note=? WHERE id=?",
+                     (utcnow(),principal.username,(decision_note or 'Installation request denied by administrator.').strip(),installation_id))
+        audit(conn,principal.username,'installation_denied',organization_id=row['organization_id'],device_id=row['device_id'],object_type='installation_request',object_id=installation_id,detail=decision_note)
+    return RedirectResponse('/requests',status_code=303)
+
+
+@app.post("/admin/devices/{device_id}/installation-mode/start")
+def start_device_installation_mode(device_id:str, duration_minutes:int=Form(15), principal:Principal=Depends(admin_auth)):
+    require_approver(principal)
+    duration=_installation_duration(duration_minutes)
+    with db() as conn:
+        d=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
+        if not d: raise HTTPException(status_code=404,detail='Device not found')
+        require_org_access(principal,d['organization_id'])
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
+        active=conn.execute("SELECT id FROM installation_requests WHERE device_id=? AND status IN ('starting','active','ending') ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
+        if active: return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
+        now=utcnow()
+        cur=conn.execute("""INSERT INTO installation_requests(device_id,file_path,requested_by,source,status,duration_minutes,approved_at,approved_by,created_at,decision_note)
+                            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                         (device_id,'Administrator initiated Installation Mode',principal.username,'admin','starting',duration,now,principal.username,now,'Administrator started Installation Mode manually.'))
+        iid=cur.lastrowid
+        payload={'installation_id':iid,'duration_minutes':duration,'trigger':'admin','actor':principal.username}
+        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'start_installation_mode',json.dumps(payload),'pending',now))
+        audit(conn,principal.username,'installation_manual_start_requested',organization_id=d['organization_id'],device_id=device_id,object_type='installation_request',object_id=iid,detail=f'duration={duration}')
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
+
+
+@app.post("/admin/devices/{device_id}/installation-mode/end")
+def end_device_installation_mode(device_id:str, principal:Principal=Depends(admin_auth)):
+    require_approver(principal)
+    with db() as conn:
+        d=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
+        if not d: raise HTTPException(status_code=404,detail='Device not found')
+        require_org_access(principal,d['organization_id'])
+        row=conn.execute("SELECT * FROM installation_requests WHERE device_id=? AND status IN ('starting','active') ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
+        if not row: return RedirectResponse(f'/devices/{device_id}',status_code=303)
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
+        payload={'installation_id':row['id'],'reason':'administrator_finished','actor':principal.username}
+        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'end_installation_mode',json.dumps(payload),'pending',utcnow()))
+        conn.execute("UPDATE installation_requests SET status='ending',decision_note='Administrator ended Installation Mode early.' WHERE id=?",(row['id'],))
+        audit(conn,principal.username,'installation_manual_end_requested',organization_id=d['organization_id'],device_id=device_id,object_type='installation_request',object_id=row['id'])
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
+
+
 @app.post('/admin/devices/bulk')
 async def bulk_device_action(request:Request, principal:Principal=Depends(admin_auth)):
     require_org_admin(principal)
@@ -4654,9 +4931,9 @@ def return_device_to_learning(device_id:str, principal:Principal=Depends(admin_a
         d=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
         if not d: raise HTTPException(status_code=404,detail='Device not found')
         require_org_access(principal,d['organization_id'])
-        if active_device_command(conn,device_id): return RedirectResponse('/?busy=1',status_code=303)
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
         conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',(device_id,'return_to_learning',json.dumps({'requested_by':principal.username}),'pending',utcnow()))
-    return RedirectResponse('/',status_code=303)
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
 
 
 @app.post("/admin/devices/{device_id}/enforcement")
@@ -4666,9 +4943,9 @@ def enable_device_enforcement(device_id:str, principal:Principal=Depends(admin_a
         d=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
         if not d: raise HTTPException(status_code=404,detail='Device not found')
         require_org_access(principal,d['organization_id'])
-        if active_device_command(conn,device_id): return RedirectResponse('/?busy=1',status_code=303)
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
         conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',(device_id,'enable_enforcement',json.dumps({'requested_by':principal.username}),'pending',utcnow()))
-    return RedirectResponse('/',status_code=303)
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
 
 
 @app.post('/admin/devices/{device_id}/group')

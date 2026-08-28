@@ -33,6 +33,8 @@ builder.Services.AddSingleton<PolicyProgressTracker>();
 builder.Services.AddSingleton<BackgroundPolicyStore>();
 builder.Services.AddSingleton<RuleWorkerClient>();
 builder.Services.AddSingleton<PolicyHelper>();
+builder.Services.AddSingleton<InstallationModeStore>();
+builder.Services.AddSingleton<InstallationModeManager>();
 builder.Services.AddSingleton<BackgroundPolicyProcessor>();
 builder.Services.AddSingleton<AgentUpdater>();
 builder.Services.AddSingleton<BlockedFileCache>();

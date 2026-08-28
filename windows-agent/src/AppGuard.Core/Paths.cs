@@ -20,5 +20,6 @@ public static class AppGuardPaths
     public static string RuleWorkerJobsDirectory => Path.Combine(RuleWorkerDirectory, "Jobs");
     public static string RuleWorkerLog => Path.Combine(RuleWorkerDirectory, "rule-worker.log");
     public static string LearnedApplicationsPath => Path.Combine(ProgramDataRoot, "learned.json");
+    public static string InstallationModeStatePath => Path.Combine(ProgramDataRoot, "installation-mode.json");
     public const string PipeName = "AppControlManager.Requests";
 }

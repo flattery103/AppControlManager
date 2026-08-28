@@ -14,6 +14,7 @@ public sealed class RequestForm : Form
     private readonly Label _headline = new() { AutoSize = true, Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 15, FontStyle.Bold) };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(540, 0) };
     private readonly Button _submit = new() { Text = "Request Access", AutoSize = true };
+    private readonly Button _install = new() { Text = "Request Installation", AutoSize = true, Visible = false };
     private readonly Button _block = new() { Text = "Block on This Device", AutoSize = true, Visible = false };
     private readonly Button _run = new() { Text = "Run Application", AutoSize = true, Visible = false };
     private readonly Button _close = new() { Text = "Close", AutoSize = true };
@@ -46,6 +47,7 @@ public sealed class RequestForm : Form
         UiTheme.StyleInput(_path);
         UiTheme.StyleInput(_reason);
         UiTheme.StylePrimaryButton(_submit);
+        UiTheme.StyleSecondaryButton(_install);
         UiTheme.StyleDangerButton(_block);
         UiTheme.StylePrimaryButton(_run);
         UiTheme.StyleSecondaryButton(_close);
@@ -57,6 +59,7 @@ public sealed class RequestForm : Form
         UiTheme.StyleSecondaryButton(browse);
         browse.Click += (_, _) => Browse();
         _submit.Click += async (_, _) => await SubmitAsync();
+        _install.Click += async (_, _) => await RequestInstallationAsync();
         _block.Click += async (_, _) => await BlockOnDeviceAsync();
         _run.Click += (_, _) => RunApplication();
         _close.Click += (_, _) => Close();
@@ -100,9 +103,10 @@ public sealed class RequestForm : Form
         table.Controls.Add(new Label { Text = "Reason:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 7);
         table.Controls.Add(_reason, 1, 7); table.SetColumnSpan(_reason, 2);
 
+        _install.Visible = blocked;
         _block.Visible = _allowUserBlock;
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        buttons.Controls.Add(_submit); buttons.Controls.Add(_block); buttons.Controls.Add(_run); buttons.Controls.Add(_close);
+        buttons.Controls.Add(_submit); buttons.Controls.Add(_install); buttons.Controls.Add(_block); buttons.Controls.Add(_run); buttons.Controls.Add(_close);
         table.Controls.Add(buttons, 1, 8); table.SetColumnSpan(buttons, 2);
         table.Controls.Add(_status, 1, 9); table.SetColumnSpan(_status, 2);
         Controls.Add(table);
@@ -185,6 +189,24 @@ public sealed class RequestForm : Form
             _submit.Enabled = true;
             _block.Enabled = _allowUserBlock;
             MessageBox.Show(this, "Could not contact the AppControl Manager service.\n\n" + ex.Message, "AppControl Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task RequestInstallationAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_path.Text)) return;
+        _submit.Enabled = false; _install.Enabled = false; _block.Enabled = false; _reason.Enabled = false;
+        _status.Text = "Submitting installation request...";
+        try
+        {
+            var response = await PipeClient.SendAsync(new PipeRequest { Action = "request_installation", FilePath = _path.Text.Trim(), Reason = _reason.Text.Trim(), RequestedBy = _requestedBy, RecordId = _blockedRecordId });
+            _status.Text = response.Message;
+            if (response.Ok) { _headline.Text = "Installation Request Pending"; _submit.Visible=false; _install.Visible=false; _block.Visible=false; }
+            else { _submit.Enabled=true; _install.Enabled=true; _block.Enabled=_allowUserBlock; _reason.Enabled=true; }
+        }
+        catch (Exception ex)
+        {
+            _status.Text=ex.Message; _submit.Enabled=true; _install.Enabled=true; _block.Enabled=_allowUserBlock; _reason.Enabled=true;
         }
     }
 

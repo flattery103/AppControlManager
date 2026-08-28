@@ -1,5 +1,12 @@
-# AppControl Manager 0.16.5
+# AppControl Manager 0.17.0
 
+
+
+## 0.17.0 Installation Mode
+
+Version 0.17.0 adds administrator-controlled timed **Installation Mode** for software installers that legitimately execute many helper EXEs, DLLs, services, and updater components. A blocked endpoint user can choose **Request Installation** instead of repeatedly requesting each component. The administrator approves a duration, but the endpoint remains in Enforcement until the user clicks **Start Installation**. Approved user requests expire after four hours if they are never started.
+
+Once started, the endpoint enters a locally timed Learning/Audit window (15 minutes by default; 1-240 minutes supported). The 0.16.5 Local Service rule worker continues preparing ConfigCI fragments during the window. On completion, AppControl Manager installs only the newly learned delta as an additional supplemental policy, preserves the existing learned baseline, and returns the base policy to Enforcement. If delta finalization fails, the agent still attempts a force-Enforcement fallback so a failed installer-learning operation cannot leave the endpoint permissive indefinitely. Administrators can also start or end Installation Mode directly from the device page.
 
 ## 0.16.5 Local Service ConfigCI rule worker
 
@@ -39,7 +46,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.16.5`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.17.0`:
 
 ```text
 AZURE_CLIENT_ID

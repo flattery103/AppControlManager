@@ -77,12 +77,9 @@ class Release0165RuleWorkerTests(unittest.TestCase):
         self.assertIn('Start-Service -Name $ruleWorkerServiceName', activation)
         self.assertIn('S-1-5-19', activation)
 
-    def test_release_surfaces_move_to_0165_without_new_signed_binary(self):
-        app = self.read("server/app.py")
+    def test_0165_release_notes_preserve_worker_boundary_without_new_signed_binary(self):
         build = self.read("windows-agent/Build.ps1")
         workflow = self.read(".github/workflows/release.yml")
-        self.assertIn(f'version="{self.VERSION}"', app)
-        self.assertIn(f"[string]$Version='{self.VERSION}'", build)
         self.assertNotIn('RuleWorker\\AppControlManager.RuleWorker.exe', build)
         self.assertNotIn('AppControlManager.RuleWorker.exe', workflow)
         notes = ROOT / "0.16.5-FEATURES.txt"

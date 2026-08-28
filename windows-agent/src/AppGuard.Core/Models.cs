@@ -23,7 +23,7 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("learning_mode")] public bool LearningMode { get; set; }
     [JsonPropertyName("policy_mode")] public string PolicyMode { get; set; } = "unknown";
     [JsonPropertyName("script_enforcement_disabled")] public bool? ScriptEnforcementDisabled { get; set; }
-    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.16.5";
+    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.17.0";
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("update_status")] public string? UpdateStatus { get; set; }
     [JsonPropertyName("update_result")] public string? UpdateResult { get; set; }
@@ -204,6 +204,7 @@ public sealed class PipeRequest
     [JsonPropertyName("parent_path")] public string? ParentPath { get; set; }
     [JsonPropertyName("component_record_ids")] public List<long> ComponentRecordIds { get; set; } = [];
     [JsonPropertyName("session_key")] public string? SessionKey { get; set; }
+    [JsonPropertyName("installation_id")] public long? InstallationId { get; set; }
 }
 
 public sealed class BlockedSnapshot
@@ -234,4 +235,7 @@ public sealed class PipeResponse
     [JsonPropertyName("requests")] public List<ApprovalStatusInfo> Requests { get; set; } = [];
     [JsonPropertyName("snapshot")] public BlockedSnapshot? Snapshot { get; set; }
     [JsonPropertyName("progress")] public PolicyProgressInfo? Progress { get; set; }
+    [JsonPropertyName("installations")] public List<InstallationStatusInfo> Installations { get; set; } = [];
+    [JsonPropertyName("installation_mode")] public InstallationModeState? InstallationMode { get; set; }
+    [JsonPropertyName("installation_id")] public long? InstallationId { get; set; }
 }

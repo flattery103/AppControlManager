@@ -463,8 +463,13 @@ public sealed class PolicyHelper
 
     public async Task ReturnToLearningAsync(CancellationToken ct)
     {
-        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Start-LearningMode.ps1");
-        await RunPowerShellAsync(script, "-NoTaskControl", ct);
+        await _policyGenerationGate.WaitAsync(ct);
+        try
+        {
+            var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Start-LearningMode.ps1");
+            await RunPowerShellAsync(script, "-NoTaskControl", ct);
+        }
+        finally { _policyGenerationGate.Release(); }
     }
 
     public async Task EnableEnforcementAsync(CancellationToken ct)
@@ -533,6 +538,85 @@ public sealed class PolicyHelper
         }
         finally { Interlocked.Decrement(ref _foregroundWaiters); }
         _log.Write("enforcement-progress completed");
+    }
+
+    public async Task FinalizeInstallationModeAsync(long installationId, CancellationToken ct)
+    {
+        _log.Write($"installation-finalize started id={installationId}");
+        Interlocked.Increment(ref _foregroundWaiters);
+        try
+        {
+            await _policyGenerationGate.WaitAsync(ct);
+            try
+            {
+                var collectScript = Path.Combine(AppGuardPaths.ScriptsDirectory, "Get-LearnedApplications.ps1");
+                await RunPowerShellAsync(collectScript, "-Save", ct);
+                var learned = ReadLearnedApplications();
+                var prep = _backgroundStore.PrepareLearningEvents(learned);
+                if (prep.Unpreparable > 0)
+                    throw new InvalidOperationException($"Installation Mode learned {prep.Unpreparable} application(s) that could not be converted into safe authorization candidates.");
+
+                var paths = learned.Select(x => x.FilePath ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var requiredKeys = _backgroundStore.LearningRuleKeysForPaths(paths);
+                var rules = _backgroundStore.RulesForKeys(requiredKeys).ToDictionary(x => x.CacheKey, StringComparer.OrdinalIgnoreCase);
+                var unresolved = 0;
+                foreach (var key in requiredKeys)
+                {
+                    if (!rules.TryGetValue(key, out var rule)) { unresolved++; continue; }
+                    if (rule.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(rule.FragmentXmlPath) && File.Exists(rule.FragmentXmlPath)) continue;
+                    try
+                    {
+                        var fragment = await GenerateRuleFragmentCoreAsync(rule, ct);
+                        _backgroundStore.MarkRuleReady(rule.CacheKey, fragment.FragmentXmlPath, rule.MinimumFileVersion);
+                    }
+                    catch (Exception ex)
+                    {
+                        _backgroundStore.MarkRuleFailed(rule.CacheKey, ex.Message);
+                        _log.Write($"installation-finalize fragment failed id={installationId} key={rule.CacheKey}: {ex.Message}");
+                        unresolved++;
+                    }
+                }
+
+                var ready = _backgroundStore.RulesForKeys(requiredKeys)
+                    .Where(x => x.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(x.FragmentXmlPath) && File.Exists(x.FragmentXmlPath))
+                    .ToArray();
+                if (ready.Length != requiredKeys.Count) unresolved += Math.Max(0, requiredKeys.Count - ready.Length - unresolved);
+                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} unresolved={unresolved}");
+                if (unresolved > 0) throw new InvalidOperationException($"Installation Mode has {unresolved} unresolved learned authorization fragment(s).");
+
+                if (ready.Length > 0)
+                {
+                    var listPath = Path.Combine(Path.GetTempPath(), $"AppControlManager-InstallationFragments-{Guid.NewGuid():N}.json");
+                    try
+                    {
+                        var fragments = ready.Select(x => x.FragmentXmlPath!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                        await File.WriteAllTextAsync(listPath, JsonSerializer.Serialize(fragments), new UTF8Encoding(false), ct);
+                        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Install-MergedSupplemental.ps1");
+                        var args = $"-FragmentListPath {Quote(listPath)} -Name {Quote("AppControl Manager Installation " + installationId)} -Json";
+                        await RunPowerShellAsync(script, args, ct);
+                    }
+                    finally { try { File.Delete(listPath); } catch { } }
+                }
+
+                await ForceEnforcementCoreAsync(ct);
+            }
+            finally { _policyGenerationGate.Release(); }
+        }
+        finally { Interlocked.Decrement(ref _foregroundWaiters); }
+        _log.Write($"installation-finalize completed id={installationId}");
+    }
+
+    public async Task ForceEnforcementAsync(CancellationToken ct)
+    {
+        await _policyGenerationGate.WaitAsync(ct);
+        try { await ForceEnforcementCoreAsync(ct); }
+        finally { _policyGenerationGate.Release(); }
+    }
+
+    private async Task ForceEnforcementCoreAsync(CancellationToken ct)
+    {
+        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Force-Enforcement.ps1");
+        await RunPowerShellAsync(script, "-NoTaskControl", ct);
     }
 
     private List<EventUpload> ReadLearnedApplications()

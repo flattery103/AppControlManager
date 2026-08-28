@@ -45,5 +45,5 @@ Start-Service $ruleWorkerServiceName
 Start-Service AppControlManager
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager 0.16.5 service and tray installed.' -ForegroundColor Green
+Write-Host 'AppControl Manager 0.17.0 service and tray installed.' -ForegroundColor Green
 Write-Host 'No Windows App Control policy was enabled by this installer.' -ForegroundColor Yellow

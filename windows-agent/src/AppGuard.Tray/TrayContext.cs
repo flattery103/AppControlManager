@@ -11,6 +11,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _requestTimer;
     private readonly System.Windows.Forms.Timer _sessionQuietTimer;
     private readonly ToolStripMenuItem _statusMenuItem;
+    private readonly ToolStripMenuItem _approvedInstallationMenuItem;
     private readonly string _requestedBy;
     private EventLogWatcher? _watcher;
     private string? _lastBlockedPath;
@@ -20,6 +21,10 @@ public sealed class TrayContext : ApplicationContext
     private readonly Dictionary<long, RequestForm> _requestForms = new();
     private readonly Dictionary<long, SessionRequestForm> _sessionRequestForms = new();
     private readonly Dictionary<long, string> _lastStatuses = new();
+    private readonly HashSet<long> _shownInstallationApprovals = [];
+    private InstallationStatusInfo? _approvedInstallation;
+    private InstallationApprovalForm? _installationApprovalForm;
+    private InstallationModeForm? _installationModeForm;
     private bool _haveStatusSnapshot;
     private bool _refreshingRequests;
     private readonly Dictionary<string, DateTimeOffset> _recentNotices = new(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +41,9 @@ public sealed class TrayContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add("Request application approval...", null, (_, _) => OpenManualRequest(_lastBlockedPath));
         menu.Items.Add("Request History...", null, async (_, _) => await ShowRequestsAsync());
+        _approvedInstallationMenuItem = new ToolStripMenuItem("Approved installation...") { Enabled = false };
+        _approvedInstallationMenuItem.Click += (_, _) => ShowApprovedInstallation();
+        menu.Items.Add(_approvedInstallationMenuItem);
         _statusMenuItem = new ToolStripMenuItem("Checking...") { Enabled = false };
         menu.Items.Add(_statusMenuItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -391,6 +399,22 @@ public sealed class TrayContext : ApplicationContext
         await RefreshRequestsAsync(true);
     }
 
+    private void ShowApprovedInstallation()
+    {
+        if (_approvedInstallation is null) return;
+        if (_installationApprovalForm is not null && !_installationApprovalForm.IsDisposed)
+        {
+            _installationApprovalForm.Show();
+            _installationApprovalForm.WindowState = FormWindowState.Normal;
+            _installationApprovalForm.Activate();
+            return;
+        }
+        _installationApprovalForm = new InstallationApprovalForm(_approvedInstallation, _requestedBy);
+        _installationApprovalForm.FormClosed += (_, _) => _installationApprovalForm = null;
+        _installationApprovalForm.Show();
+        _installationApprovalForm.Activate();
+    }
+
     private async Task RefreshRequestsAsync(bool showErrors)
     {
         if (_refreshingRequests) return;
@@ -401,6 +425,28 @@ public sealed class TrayContext : ApplicationContext
             if (!response.Ok) throw new InvalidOperationException(response.Message);
             var requests = response.Requests.OrderByDescending(r => r.Id).ToList();
             _requestsForm?.UpdateRequests(requests);
+            var installations = response.Installations.OrderByDescending(x => x.Id).ToList();
+            var approvedInstallation = installations.FirstOrDefault(x => x.Status.Equals("approved", StringComparison.OrdinalIgnoreCase));
+            _approvedInstallation = approvedInstallation;
+            _approvedInstallationMenuItem.Enabled = approvedInstallation is not null;
+            if (approvedInstallation is not null && _shownInstallationApprovals.Add(approvedInstallation.Id))
+                ShowApprovedInstallation();
+
+            var installationMode = response.InstallationMode;
+            if (installationMode is not null && installationMode.Active)
+            {
+                if (_installationModeForm is null || _installationModeForm.IsDisposed)
+                {
+                    _installationModeForm = new InstallationModeForm(installationMode, _requestedBy);
+                    _installationModeForm.Show();
+                }
+                else _installationModeForm.UpdateFrom(installationMode);
+            }
+            else if (_installationModeForm is not null && !_installationModeForm.IsDisposed)
+            {
+                _installationModeForm.Close();
+                _installationModeForm = null;
+            }
 
             PolicyProgressInfo? progress = null;
             if (requests.Any(r => r.Status == "approving"))

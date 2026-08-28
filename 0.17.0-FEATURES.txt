@@ -1,0 +1,32 @@
+AppControl Manager 0.17.0
+=========================
+
+Installation Mode
+-----------------
+- Add a distinct Request Installation action to the blocked-application popup and grouped block popup. Request Access remains unchanged for ordinary application approvals.
+- Administrator approval grants a timed Installation Mode duration but does not immediately weaken endpoint enforcement. The endpoint user receives an Installation Approved prompt and must click Start Installation before the timer begins.
+- User installation approvals have a four hours activation window. If the user never starts the installation during that period, the approval expires without changing endpoint policy mode.
+- Default duration is 15 minutes. Administrator controls accept 1-240 minutes, with 15, 30, and 60 minute presets in the UI.
+- Add manual Start Installation Mode and End Installation Mode Now controls to the device page for administrator-led maintenance.
+
+Endpoint safety and persistence
+-------------------------------
+- Persist the active Installation Mode session and local deadline in C:\ProgramData\AppControlManager\installation-mode.json.
+- The endpoint agent, not the browser or server, owns the active timer. The deadline therefore survives browser closure, server connectivity loss, and service restart.
+- Expiration is checked from the independent maintenance loop and automatically begins finalization.
+- Installation finalization learns only the activity observed since the Installation Mode window started.
+- New Installation Mode authorization is installed as an additional AppControl Manager Installation supplemental. Existing learned baseline authorization is preserved rather than replaced.
+- ConfigCI fragment generation continues through the 0.16.5 Local Service Rule Worker boundary.
+- If new delta authorization cannot be finalized, AppControl Manager runs a force-Enforcement fallback. The failed delta is reported, but the endpoint is not intentionally left in Learning/Audit mode.
+
+Administration and audit
+------------------------
+- Add a separate Installation Requests queue with Approve Installation and Deny actions.
+- Track pending, approved, starting, active, ending, completed, expired, denied, and failed installation lifecycle states.
+- Record activation deadline, actual start/end times, administrator identity, endpoint user, duration, and result.
+- Device mode POST actions now return to the same device page instead of redirecting to the dashboard.
+
+Out of scope
+------------
+- Temporary .NET single-file extraction path classification remains unchanged in 0.17.0.
+- Existing historical approval-policy lifecycle consolidation remains unchanged.

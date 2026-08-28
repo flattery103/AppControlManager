@@ -13,13 +13,15 @@ public sealed class LocalRequestServer
     private readonly FileLogger _log;
     private readonly BlockedFileCache _cache;
     private readonly PolicyProgressTracker _progress;
+    private readonly InstallationModeManager _installationMode;
 
-    public LocalRequestServer(ApiClient api, FileLogger log, BlockedFileCache cache, PolicyProgressTracker progress)
+    public LocalRequestServer(ApiClient api, FileLogger log, BlockedFileCache cache, PolicyProgressTracker progress, InstallationModeManager installationMode)
     {
         _api = api;
         _log = log;
         _cache = cache;
         _progress = progress;
+        _installationMode = installationMode;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -116,12 +118,15 @@ public sealed class LocalRequestServer
         {
             var mode = PolicyInspector.GetMode();
             var requests = await _api.GetRequestsAsync(req.RequestedBy, ct);
+            var installations = await _api.GetInstallationsAsync(req.RequestedBy, ct);
             var active = requests.Count(IsActive);
             return new PipeResponse
             {
                 Ok = true,
                 Mode = mode,
                 Requests = requests,
+                Installations = installations,
+                InstallationMode = _installationMode.Snapshot(),
                 Message = active == 0 ? $"AppControl Manager mode: {mode}\nNo current approval requests." : $"AppControl Manager mode: {mode}\nCurrent approval requests: {active}"
             };
         }
@@ -130,6 +135,21 @@ public sealed class LocalRequestServer
         {
             var requests = await _api.GetRequestsAsync(req.RequestedBy, ct);
             return new PipeResponse { Ok = true, Requests = requests, Message = $"Returned {requests.Count} request(s)." };
+        }
+
+        if (string.Equals(req.Action, "start_installation", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!req.InstallationId.HasValue || req.InstallationId.Value <= 0) return new PipeResponse { Ok=false, Message="Installation request ID was missing." };
+            var result = await _api.StartInstallationAsync(req.InstallationId.Value, new InstallationStartRequest { RequestedBy=req.RequestedBy }, ct);
+            return new PipeResponse { Ok=result.Ok, InstallationId=result.InstallationId, RequestStatus=result.Status, Message="Installation start requested. The endpoint will enter Installation Mode now." };
+        }
+        if (string.Equals(req.Action, "finish_installation", StringComparison.OrdinalIgnoreCase))
+        {
+            var state=_installationMode.Snapshot();
+            var id=req.InstallationId ?? (state.InstallationId > 0 ? state.InstallationId : null);
+            if (!id.HasValue) return new PipeResponse { Ok=false, Message="No active Installation Mode session was found." };
+            var result=await _api.FinishInstallationAsync(id.Value,new InstallationStartRequest { RequestedBy=req.RequestedBy },ct);
+            return new PipeResponse { Ok=result.Ok, InstallationId=result.InstallationId, RequestStatus=result.Status, Message="Installation Mode is being finalized." };
         }
 
         if (string.Equals(req.Action, "block_session", StringComparison.OrdinalIgnoreCase))
@@ -173,6 +193,20 @@ public sealed class LocalRequestServer
                 DecisionNote = result.DecisionNote,
                 Message = result.DecisionNote ?? "Blocked on this device."
             };
+        }
+
+        if (string.Equals(req.Action, "request_installation_session", StringComparison.OrdinalIgnoreCase))
+        {
+            var ids=req.ComponentRecordIds.Where(x=>x>0).Distinct().ToArray();
+            var snapshots=ids.Select(id=>_cache.Get(id)).Where(x=>x is not null).Cast<BlockedSnapshot>().ToList();
+            var chosen=snapshots.FirstOrDefault(x=>Path.GetExtension(x.OriginalPath).Equals(".exe",StringComparison.OrdinalIgnoreCase)) ?? snapshots.FirstOrDefault();
+            if (chosen is null) return new PipeResponse { Ok=false, Message="The installer metadata is no longer available. Re-run the installer and try again." };
+            var original=DevicePathResolver.Resolve(chosen.OriginalPath) ?? chosen.OriginalPath;
+            var source=File.Exists(original) ? original : (chosen.CachedPath is not null && File.Exists(chosen.CachedPath) ? chosen.CachedPath : null);
+            if (source is null) return new PipeResponse { Ok=false, Message="The installer disappeared before AppControl Manager could preserve it." };
+            var meta=FileMetadataReader.Read(source);
+            var result=await _api.RequestInstallationAsync(new ApprovalRequest { FilePath=original, PolicySourcePath=string.Equals(source,original,StringComparison.OrdinalIgnoreCase)?null:source, Sha256=meta.Sha256??chosen.Sha256, Publisher=meta.Publisher??chosen.Publisher, ProductName=meta.ProductName??chosen.ProductName, FileVersion=meta.FileVersion??chosen.FileVersion, Reason=req.Reason, RequestedBy=req.RequestedBy },ct);
+            return new PipeResponse { Ok=result.Ok, InstallationId=result.InstallationId, RequestStatus=result.Status, Duplicate=result.Duplicate, Message=result.Duplicate ? $"Installation request {result.InstallationId} already exists and is {result.Status}." : $"Installation request {result.InstallationId} submitted." };
         }
 
         if (string.Equals(req.Action, "request_session", StringComparison.OrdinalIgnoreCase))
@@ -229,7 +263,8 @@ public sealed class LocalRequestServer
         }
 
         var isUserBlock = string.Equals(req.Action, "block", StringComparison.OrdinalIgnoreCase);
-        if (!isUserBlock && !string.Equals(req.Action, "request", StringComparison.OrdinalIgnoreCase))
+        var isInstallation = string.Equals(req.Action, "request_installation", StringComparison.OrdinalIgnoreCase);
+        if (!isUserBlock && !isInstallation && !string.Equals(req.Action, "request", StringComparison.OrdinalIgnoreCase))
             return new PipeResponse { Ok = false, Message = "Unknown local request action." };
         if (string.IsNullOrWhiteSpace(req.FilePath))
             return new PipeResponse { Ok = false, Message = "Select an application first." };
@@ -272,6 +307,12 @@ public sealed class LocalRequestServer
                 DecisionNote = blockResult.DecisionNote,
                 Message = blockResult.DecisionNote ?? "Blocked on this device."
             };
+        }
+
+        if (isInstallation)
+        {
+            var install = await _api.RequestInstallationAsync(apiReq, ct);
+            return new PipeResponse { Ok=install.Ok, InstallationId=install.InstallationId, RequestStatus=install.Status, Duplicate=install.Duplicate, Message=install.Duplicate ? $"Installation request {install.InstallationId} already exists and is {install.Status}." : $"Installation request {install.InstallationId} submitted." };
         }
 
         var r = await _api.RequestApprovalAsync(apiReq, ct);

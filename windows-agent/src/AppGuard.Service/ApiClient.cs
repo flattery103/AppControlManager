@@ -87,6 +87,42 @@ public sealed class ApiClient
         return await response.Content.ReadFromJsonAsync<List<ApprovalStatusInfo>>(Json, ct) ?? [];
     }
 
+    public async Task<InstallationRequestResponse> RequestInstallationAsync(ApprovalRequest body, CancellationToken ct)
+    {
+        using var req = Request(HttpMethod.Post, "/api/installations", body);
+        using var response = await SendAsync(req, ct);
+        return await response.Content.ReadFromJsonAsync<InstallationRequestResponse>(Json, ct) ?? new InstallationRequestResponse();
+    }
+
+    public async Task<List<InstallationStatusInfo>> GetInstallationsAsync(string? requestedBy, CancellationToken ct)
+    {
+        var path = "/api/installations";
+        if (!string.IsNullOrWhiteSpace(requestedBy)) path += "?requested_by=" + Uri.EscapeDataString(requestedBy);
+        using var req = Request(HttpMethod.Get, path);
+        using var response = await SendAsync(req, ct);
+        return await response.Content.ReadFromJsonAsync<List<InstallationStatusInfo>>(Json, ct) ?? [];
+    }
+
+    public async Task<InstallationRequestResponse> StartInstallationAsync(long id, InstallationStartRequest body, CancellationToken ct)
+    {
+        using var req = Request(HttpMethod.Post, $"/api/installations/{id}/start", body);
+        using var response = await SendAsync(req, ct);
+        return await response.Content.ReadFromJsonAsync<InstallationRequestResponse>(Json, ct) ?? new InstallationRequestResponse();
+    }
+
+    public async Task<InstallationRequestResponse> FinishInstallationAsync(long id, InstallationStartRequest body, CancellationToken ct)
+    {
+        using var req = Request(HttpMethod.Post, $"/api/installations/{id}/finish", body);
+        using var response = await SendAsync(req, ct);
+        return await response.Content.ReadFromJsonAsync<InstallationRequestResponse>(Json, ct) ?? new InstallationRequestResponse();
+    }
+
+    public async Task ReportInstallationAsync(long id, InstallationReportRequest body, CancellationToken ct)
+    {
+        using var req = Request(HttpMethod.Post, $"/api/installations/{id}/report", body);
+        using var _ = await SendAsync(req, ct);
+    }
+
     public async Task<List<AgentCommand>> GetCommandsAsync(CancellationToken ct)
     {
         using var req = Request(HttpMethod.Get, "/api/commands");

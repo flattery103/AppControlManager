@@ -19,6 +19,7 @@ public sealed class SessionRequestForm : Form
     private readonly Label _summary = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
     private readonly Button _submit = new() { Text = "Request Access", AutoSize = true, Enabled = false };
+    private readonly Button _install = new() { Text = "Request Installation", AutoSize = true, Enabled = false };
     private readonly Button _block = new() { Text = "Block on This Device", AutoSize = true, Enabled = false };
     private readonly Button _run = new() { Text = "Run Application", AutoSize = true, Visible = false };
     private readonly Button _close = new() { Text = "Close", AutoSize = true };
@@ -50,6 +51,7 @@ public sealed class SessionRequestForm : Form
         UiTheme.StyleList(_list);
         UiTheme.StyleInput(_reason);
         UiTheme.StylePrimaryButton(_submit);
+        UiTheme.StyleSecondaryButton(_install);
         UiTheme.StyleDangerButton(_block);
         UiTheme.StylePrimaryButton(_run);
         UiTheme.StyleSecondaryButton(_close);
@@ -64,12 +66,13 @@ public sealed class SessionRequestForm : Form
         _list.Columns.Add("Loaded by", 260);
 
         _submit.Click += async (_, _) => await SubmitAsync();
+        _install.Click += async (_, _) => await RequestInstallationAsync();
         _block.Click += async (_, _) => await BlockOnDeviceAsync();
         _run.Click += (_, _) => RunApplication();
         _close.Click += (_, _) => Close();
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        buttons.Controls.Add(_submit); buttons.Controls.Add(_block); buttons.Controls.Add(_run); buttons.Controls.Add(_close);
+        buttons.Controls.Add(_submit); buttons.Controls.Add(_install); buttons.Controls.Add(_block); buttons.Controls.Add(_run); buttons.Controls.Add(_close);
 
         var table = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(22), RowCount = 8, ColumnCount = 2, BackColor = UiTheme.CardBack };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -117,6 +120,7 @@ public sealed class SessionRequestForm : Form
         if (IsSubmitted) return;
         _collecting = collecting;
         _submit.Enabled = !collecting && _components.Count > 0;
+        _install.Enabled = !collecting && _components.Count > 0;
         _block.Enabled = !collecting && _components.Count > 0;
         _status.Text = collecting
             ? "Collecting related components..."
@@ -176,6 +180,21 @@ public sealed class SessionRequestForm : Form
             _block.Enabled = true;
             MessageBox.Show(this, "Could not contact the AppControl Manager service.\n\n" + ex.Message, "AppControl Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private async Task RequestInstallationAsync()
+    {
+        if (_collecting || _recordIds.Count == 0) return;
+        _submit.Enabled=false; _install.Enabled=false; _block.Enabled=false; _reason.Enabled=false;
+        _status.Text="Submitting installation request...";
+        try
+        {
+            var response=await PipeClient.SendAsync(new PipeRequest { Action = "request_installation_session", Reason=_reason.Text.Trim(), RequestedBy=_requestedBy, ComponentRecordIds=_recordIds.ToList(), SessionKey=_sessionKey });
+            _status.Text=response.Message;
+            if (response.Ok) { _headline.Text="Installation Request Pending"; _submit.Visible=false; _install.Visible=false; _block.Visible=false; }
+            else { _reason.Enabled=true; _submit.Enabled=true; _install.Enabled=true; _block.Enabled=true; }
+        }
+        catch(Exception ex) { _status.Text=ex.Message; _reason.Enabled=true; _submit.Enabled=true; _install.Enabled=true; _block.Enabled=true; }
     }
 
     private async Task BlockOnDeviceAsync()
