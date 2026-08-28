@@ -22,14 +22,14 @@ $trustHelper=Join-Path $trustRoot 'New-SupplementalForFiles.ps1'
 $basePolicy=Join-Path $trustRoot 'Policies\BasePolicy.xml'
 $binaryList=@($serviceExe,$trayExe)
 $preauthPolicyId=$null
-Write-Host 'Preparing AppControl Manager 0.16.1 binaries for the current enforcement policy...'
+Write-Host 'Preparing AppControl Manager 0.16.2 binaries for the current enforcement policy...'
 if((Test-Path $trustHelper) -and (Test-Path $basePolicy)) {
     try {
-        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 0.16.1 Core Binaries' -AsObject -AlreadyExpanded
+        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 0.16.2 Core Binaries' -AsObject -AlreadyExpanded
         $preauthPolicyId=[string]$trustResult.policy_id
         Write-Host "Created supplemental allow policy for the new service/tray binaries: $preauthPolicyId" -ForegroundColor Green
     } catch {
-        throw "Could not pre-authorize the 0.16.1 binaries: $($_.Exception.Message)"
+        throw "Could not pre-authorize the 0.16.2 binaries: $($_.Exception.Message)"
     }
 }
 
@@ -49,7 +49,7 @@ if(!(Test-Path $currentConfig) -and (Test-Path $legacyConfig)) {
 }
 New-Item -ItemType Directory -Path $programData,$programFiles,"$programFiles\Scripts","$programData\Policies","$programData\Updates" -Force | Out-Null
 if(-not [string]::IsNullOrWhiteSpace($preauthPolicyId)) {
-    [ordered]@{ version='0.16.1'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
+    [ordered]@{ version='0.16.2'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
 }
 
 Copy-Item "$PSScriptRoot\scripts\*.ps1" "$programFiles\Scripts\" -Force
@@ -71,6 +71,6 @@ Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' 
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Service AppControlManager
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager endpoint upgraded to 0.16.1.' -ForegroundColor Green
+Write-Host 'AppControl Manager endpoint upgraded to 0.16.2.' -ForegroundColor Green
 Write-Host 'Enrollment, state, learned data, block cache, logs and installed Windows App Control policies were preserved.'
 Write-Host 'Legacy AppGuardPOC folders were retained for rollback but are no longer used.' -ForegroundColor Yellow

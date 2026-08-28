@@ -26,9 +26,10 @@ try {
     $dedupTimer.Stop()
     Write-Output ("ACM_STAGE learned-dedup elapsed={0:F1}s learned={1} unique={2}" -f $dedupTimer.Elapsed.TotalSeconds,$learned.Count,$paths.Count)
     if($paths.Count -gt 0) {
-        # These paths already came from actual Code Integrity learning events. Do not recursively
-        # rediscover each application's Program Files tree again during the mode transition.
-        & "$PSScriptRoot\New-SupplementalForFiles.ps1" -FilePath $paths -Name 'AppControl Manager Learned Baseline' -AlreadyExpanded | ForEach-Object {
+        # Build the learned baseline from the signer/product/version metadata already collected
+        # above. The dedicated helper groups safe signer+product families before ConfigCI sees
+        # them, while retaining conservative per-file/hash fallbacks for unusual binaries.
+        & "$PSScriptRoot\New-LearnedBaselinePolicy.ps1" -LearnedApplications $learned -Name 'AppControl Manager Learned Baseline' | ForEach-Object {
             if(([string]$_).StartsWith('ACM_STAGE')) { Write-Output ([string]$_) }
         }
     }

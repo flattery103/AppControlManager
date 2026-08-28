@@ -1,0 +1,21 @@
+AppControl Manager 0.16.2
+=========================
+
+WDAC learned baseline rule generation
+-------------------------------------
+- Replaces the single large learned-baseline FilePublisher scan with a dedicated learned baseline builder.
+- Reuses signer, product and version metadata already captured during Learning instead of rescanning signatures before classification.
+- Groups safe signed applications by publisher/product and generates one ProductName-scoped FilePublisher representative per group.
+- Selects the lowest parseable learned file version as each publisher/product representative so all observed versions remain covered while future versions can continue to match.
+- Keeps generic/runtime signed files conservative with individual FilePublisher rules.
+- Uses hash rules for unsigned learned files.
+- Emits learned baseline classification counts and separate timing for family, individual, hash and total rule generation stages.
+
+Reliability and diagnostics
+---------------------------
+- Filters ConfigCI "Scan completed successfully" noise from helper stderr as well as stdout, including failed or cancelled policy operations.
+- Retains the 0.16.1 independent heartbeat/command loops so long WDAC operations do not make healthy endpoints appear offline.
+
+Deployment
+----------
+- Server version advances to 0.16.2 so the normal GitHub server updater can import the matching 0.16.2 Windows agent release automatically.

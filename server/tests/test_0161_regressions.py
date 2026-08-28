@@ -16,12 +16,15 @@ class Release0161RegressionTests(unittest.TestCase):
     def test_learning_to_enforcement_uses_learned_paths_without_bundle_reexpansion(self):
         text = (ROOT / 'windows-agent' / 'scripts' / 'End-LearningAndEnforce.ps1').read_text(encoding='utf-8')
         self.assertIn('Select-Object -Unique', text)
-        self.assertIn("New-SupplementalForFiles.ps1\" -FilePath $paths -Name 'AppControl Manager Learned Baseline' -AlreadyExpanded", text)
         self.assertIn('ACM_STAGE learned-collection', text)
         self.assertIn('ACM_STAGE learned-dedup', text)
         self.assertIn('ACM_STAGE enforcement-total', text)
         self.assertIn("StartsWith('ACM_STAGE')", text)
-        self.assertNotIn("New-SupplementalForFiles.ps1\" -FilePath $paths -Name 'AppControl Manager Learned Baseline' -AlreadyExpanded | Out-Null", text)
+        # 0.16.1 removed recursive bundle re-expansion. Later releases may route the learned
+        # snapshot through a dedicated baseline builder, but must not restore the old
+        # New-SupplementalForFiles call without -AlreadyExpanded.
+        if 'New-SupplementalForFiles.ps1' in text:
+            self.assertIn('-AlreadyExpanded', text)
 
     def test_supplemental_helper_emits_policy_stage_timings(self):
         text = (ROOT / 'windows-agent' / 'scripts' / 'New-SupplementalForFiles.ps1').read_text(encoding='utf-8')

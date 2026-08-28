@@ -357,7 +357,7 @@ public sealed class PolicyHelper
                 _log.Write("policy-helper " + line);
         }
         await p.WaitForExitAsync(ct);
-        var stderr = await stderrTask;
+        var stderr = CleanPolicyHelperOutput(await stderrTask);
         var stdoutText = stdout.ToString();
         if (p.ExitCode != 0) throw new InvalidOperationException($"Policy helper failed ({p.ExitCode}): {stderr}\n{stdoutText}".Trim());
         if (!string.IsNullOrWhiteSpace(stderr)) _log.Write("policy-helper stderr: " + stderr.Trim());
@@ -380,14 +380,17 @@ public sealed class PolicyHelper
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
         await p.WaitForExitAsync(ct);
         var stdout = CleanPolicyHelperOutput(await stdoutTask);
-        var stderr = await stderrTask;
+        var stderr = CleanPolicyHelperOutput(await stderrTask);
         if (p.ExitCode != 0) throw new InvalidOperationException($"Policy helper failed ({p.ExitCode}): {stderr}\n{stdout}".Trim());
         if (!string.IsNullOrWhiteSpace(stderr)) _log.Write("policy-helper stderr: " + stderr.Trim());
         return stdout;
     }
 
     private static bool IsPolicyHelperNoise(string? line)
-        => string.Equals(line?.Trim(), "Scan completed successfully", StringComparison.OrdinalIgnoreCase);
+    {
+        var normalized = line?.Trim().Trim('"');
+        return string.Equals(normalized, "Scan completed successfully", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string CleanPolicyHelperOutput(string output)
         => string.Join(Environment.NewLine, output.Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries).Where(line => !IsPolicyHelperNoise(line)));
