@@ -227,13 +227,7 @@ class Release0170InstallationModeTests(unittest.TestCase):
         self.assertNotIn("Enable Enforcement", active)
         self.assertIn("End Installation Mode Now", active)
 
-    def test_release_surfaces_move_to_0170(self):
-        app = self.text("server/app.py")
-        build = self.text("windows-agent/Build.ps1")
-        models = self.text("windows-agent/src/AppGuard.Core/Models.cs")
-        self.assertIn(f'version="{self.VERSION}"', app)
-        self.assertIn(f"[string]$Version='{self.VERSION}'", build)
-        self.assertIn(f'AgentVersion {{ get; set; }} = "{self.VERSION}"', models)
+    def test_0170_release_notes_preserve_installation_mode_contract(self):
         notes = ROOT / "0.17.0-FEATURES.txt"
         self.assertTrue(notes.is_file())
         text = notes.read_text(encoding="utf-8")

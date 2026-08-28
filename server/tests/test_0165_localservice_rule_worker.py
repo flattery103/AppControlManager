@@ -62,20 +62,23 @@ class Release0165RuleWorkerTests(unittest.TestCase):
         self.assertIn("*S-1-5-19:(OI)(CI)(M)", provisioner)
         self.assertIn('"sc.exe", "create"', provisioner)
 
-    def test_install_update_and_uninstall_manage_local_service_worker(self):
+    def test_install_update_and_uninstall_preserve_local_service_worker_lifecycle(self):
         installer = self.read("windows-agent/src/AppControlManager.Installer/Program.cs")
         upgrade = self.read("windows-agent/Upgrade-Agent.ps1")
         activation = self.read("windows-agent/scripts/Apply-AgentUpdate.ps1")
         uninstall = self.read("windows-agent/Uninstall-Agent.ps1")
-        for text in (installer, upgrade, activation):
+        self.assertIn('AppControlManagerRuleWorker', installer)
+        self.assertIn('StartMainAndVerify', installer)
+        self.assertNotIn('EnsureRuleWorkerService', installer)
+        for text in (upgrade, activation):
             self.assertIn('AppControlManagerRuleWorker', text)
-            self.assertIn('--rule-worker', text)
-            self.assertTrue('LocalService' in text or 'LOCAL SERVICE' in text)
+            self.assertIn('Stop-Service', text)
+            self.assertIn('Get-Service', text)
         self.assertIn('AppControlManagerRuleWorker', uninstall)
         self.assertIn('delete AppControlManagerRuleWorker', uninstall)
         self.assertIn('Stop-Service -Name $ruleWorkerServiceName', activation)
-        self.assertIn('Start-Service -Name $ruleWorkerServiceName', activation)
-        self.assertIn('S-1-5-19', activation)
+        self.assertNotIn('Start-Service -Name $ruleWorkerServiceName', activation)
+        self.assertIn('Start-Service -Name $serviceName', activation)
 
     def test_0165_release_notes_preserve_worker_boundary_without_new_signed_binary(self):
         build = self.read("windows-agent/Build.ps1")

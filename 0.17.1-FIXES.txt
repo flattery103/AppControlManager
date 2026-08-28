@@ -1,0 +1,35 @@
+AppControl Manager 0.17.1
+
+Managed agent update repair
+
+- Fix the Windows PowerShell 5.1 native-argument parsing failure that caused
+  sc.exe to return exit code 1639 while the activation helper configured the
+  AppControlManagerRuleWorker service.
+- Run Apply-AgentUpdate.ps1 from the downloaded, SHA256-verified and
+  manifest-validated staged package. Future releases can therefore carry a
+  corrected activation helper instead of depending on an older installed copy.
+- Remove duplicate Rule Worker service configuration from PowerShell. The
+  signed AppControlManager.Service.exe now provisions the Rule Worker through
+  the existing C# ProcessStartInfo.ArgumentList implementation.
+- Verify that both the main service and Rule Worker remain running before an
+  update is marked installed. Startup failures now include Windows service
+  state, Win32 exit code and service-specific exit code in update status.
+- Require a complete rollback snapshot before stopping either service. A
+  backup preparation failure now leaves the working agent online instead of
+  entering rollback with a partial copy.
+- Stage the repair installer payload below protected ProgramData storage,
+  validate every manifest file and SHA256, require valid Authenticode on the
+  replacement service and tray, and reject unmanifested payload files.
+- Persist repair/update cleanup state atomically and retry removal of older
+  temporary WDAC preauthorization policies when cleanup is interrupted.
+
+Bootstrap requirement
+
+Endpoints already running 0.16.5 or 0.17.0 must use the signed 0.17.1 installer
+once because their installed activation helper contains the PowerShell failure.
+The installer automatically detects an existing endpoint, disables first-time
+enrollment, preserves enrollment, policy, learning and audit data stored in
+C:\ProgramData\AppControlManager, and backs up the current Program Files before
+replacement. If either service does not remain running, it restores the prior
+application files automatically. Normal dashboard-managed updates can resume
+after 0.17.1 is installed.

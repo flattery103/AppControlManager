@@ -103,7 +103,7 @@ public sealed class AgentUpdater
 
     public void LaunchActivation(StagedAgentUpdate update, string currentVersion)
     {
-        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Apply-AgentUpdate.ps1");
+        var script = Path.Combine(update.StagingPath, "scripts", "Apply-AgentUpdate.ps1");
         if (!File.Exists(script)) throw new FileNotFoundException("Agent update activation helper is missing.", script);
         var backup = Path.Combine(AppGuardPaths.UpdateDirectory, "Backups");
         Directory.CreateDirectory(backup);
@@ -138,7 +138,7 @@ public sealed class AgentUpdater
                     await _policies.RemovePolicyAsync(status.previous_preauth_policy_id, ct);
                     _log.Write($"agent-update removed previous preauthorization policy id={status.previous_preauth_policy_id}");
                 }
-                catch (Exception ex) { _log.Write("agent-update previous trust cleanup: " + ex.Message); }
+                catch (Exception ex) { _log.Write("agent-update previous trust cleanup (will retry): " + ex.Message); return; }
             }
             WriteCurrent(new CurrentUpdateFile { version = currentVersion, preauth_policy_id = status.preauth_policy_id });
             status.cleanup_complete = true;
@@ -187,12 +187,16 @@ public sealed class AgentUpdater
 
         if (!doc.RootElement.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("Agent package manifest does not contain a files list.");
+        var manifestPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in files.EnumerateArray())
         {
             var relative = entry.TryGetProperty("path", out var p) ? p.GetString() : null;
             var expectedHash = entry.TryGetProperty("sha256", out var h) ? h.GetString() : null;
             if (string.IsNullOrWhiteSpace(relative) || string.IsNullOrWhiteSpace(expectedHash))
                 throw new InvalidDataException("Agent package manifest contains an invalid file entry.");
+            var manifestPath = relative.Replace('\\', '/');
+            if (!manifestPaths.Add(manifestPath))
+                throw new InvalidDataException("Agent package manifest contains a duplicate file entry: " + relative);
             var normalized = relative.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
             var full = Path.GetFullPath(Path.Combine(staging, normalized));
             var stageRoot = Path.GetFullPath(staging) + Path.DirectorySeparatorChar;
@@ -204,6 +208,24 @@ public sealed class AgentUpdater
                 throw new InvalidDataException("Agent package file hash mismatch: " + relative);
             if (entry.TryGetProperty("size", out var sizeElement) && sizeElement.TryGetInt64(out var expectedSize) && new FileInfo(full).Length != expectedSize)
                 throw new InvalidDataException("Agent package file size mismatch: " + relative);
+        }
+
+        var requiredManifestPaths = new[]
+        {
+            "Service/AppControlManager.Service.exe",
+            "Tray/AppControlManager.Tray.exe",
+            "scripts/Apply-AgentUpdate.ps1"
+        };
+        foreach (var requiredPath in requiredManifestPaths)
+            if (!manifestPaths.Contains(requiredPath))
+                throw new InvalidDataException("Agent package manifest does not authenticate required file: " + requiredPath);
+
+        foreach (var file in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(staging, file).Replace('\\', '/');
+            if (relative.Equals("agent-manifest.json", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!manifestPaths.Contains(relative))
+                throw new InvalidDataException("Agent package contains an unmanifested file: " + relative);
         }
     }
 

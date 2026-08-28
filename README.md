@@ -1,6 +1,12 @@
-# AppControl Manager 0.17.0
+# AppControl Manager 0.17.1
 
 
+
+## 0.17.1 Managed Update Repair
+
+Version 0.17.1 fixes the Windows PowerShell 5.1 argument parsing failure that returned `sc.exe` exit code 1639 while configuring the Rule Worker during managed updates. The manifest-verified helper now runs directly from the staged update package, and the signed main service owns Rule Worker provisioning through its existing C# implementation. Update activation requires a complete rollback backup, verifies both services, and reports Windows service state and exit codes when startup fails.
+
+Endpoints on 0.16.5 or 0.17.0 need the signed 0.17.1 installer once because their installed activation helper contains the failure. The installer preserves enrollment, policy, learning, and audit data under `C:\ProgramData\AppControlManager`; its protected staging area validates manifest hashes and Authenticode before replacement. Subsequent managed releases can use the staged helper and repair their own activation behavior.
 
 ## 0.17.0 Installation Mode
 
@@ -46,7 +52,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.17.0`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.17.1`:
 
 ```text
 AZURE_CLIENT_ID

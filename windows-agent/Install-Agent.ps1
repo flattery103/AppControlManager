@@ -33,17 +33,20 @@ Copy-Item $serviceExe "$programFiles\AppControlManager.Service.exe" -Force
 Copy-Item $trayExe "$programFiles\AppControlManager.Tray.exe" -Force
 
 $existingWorker=Get-Service -Name $ruleWorkerServiceName -ErrorAction SilentlyContinue
-if($existingWorker){ Stop-Service $ruleWorkerServiceName -Force -ErrorAction SilentlyContinue; sc.exe delete $ruleWorkerServiceName | Out-Null; Start-Sleep 1 }
-$workerBin='"C:\Program Files\AppControlManager\AppControlManager.Service.exe" --rule-worker'
-& sc.exe create $ruleWorkerServiceName binPath= $workerBin start= auto obj= 'NT AUTHORITY\LocalService' DisplayName= 'AppControl Manager Rule Worker' | Out-Null
-if($LASTEXITCODE -ne 0){ throw 'Could not create AppControl Manager Rule Worker service.' }
+if($existingWorker){ Stop-Service $ruleWorkerServiceName -Force -ErrorAction SilentlyContinue }
 
 $existing=Get-Service -Name AppControlManager -ErrorAction SilentlyContinue
 if($existing){ Stop-Service AppControlManager -Force -ErrorAction SilentlyContinue; sc.exe delete AppControlManager | Out-Null; Start-Sleep 1 }
 New-Service -Name AppControlManager -BinaryPathName '"C:\Program Files\AppControlManager\AppControlManager.Service.exe"' -DisplayName 'AppControl Manager Agent' -Description 'AppControl Manager application-control agent' -StartupType Automatic | Out-Null
-Start-Service $ruleWorkerServiceName
-Start-Service AppControlManager
+Start-Service AppControlManager -ErrorAction Stop
+$workerDeadline=(Get-Date).AddSeconds(30)
+do {
+    $worker=Get-Service $ruleWorkerServiceName -ErrorAction SilentlyContinue
+    if($worker -and $worker.Status -eq 'Running'){ break }
+    Start-Sleep -Seconds 1
+} while((Get-Date) -lt $workerDeadline)
+if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager 0.17.0 service and tray installed.' -ForegroundColor Green
+Write-Host 'AppControl Manager 0.17.1 service and tray installed.' -ForegroundColor Green
 Write-Host 'No Windows App Control policy was enabled by this installer.' -ForegroundColor Yellow

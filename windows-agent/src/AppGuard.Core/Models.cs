@@ -23,7 +23,7 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("learning_mode")] public bool LearningMode { get; set; }
     [JsonPropertyName("policy_mode")] public string PolicyMode { get; set; } = "unknown";
     [JsonPropertyName("script_enforcement_disabled")] public bool? ScriptEnforcementDisabled { get; set; }
-    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.17.0";
+    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.17.1";
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("update_status")] public string? UpdateStatus { get; set; }
     [JsonPropertyName("update_result")] public string? UpdateResult { get; set; }

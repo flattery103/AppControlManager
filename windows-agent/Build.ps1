@@ -1,6 +1,6 @@
 param(
     [string]$Configuration='Release',
-    [string]$Version='0.17.0',
+    [string]$Version='0.17.1',
     [ValidateSet('Full','Prepare','Package')]
     [string]$Stage='Full',
     [switch]$RequireSignedPayload
@@ -105,8 +105,8 @@ Set-Content -LiteralPath "$package.sha256" -Value "$packageHash  $(Split-Path $p
 Write-Host "  Package: $package" -ForegroundColor Green
 Write-Host "  SHA256:  $packageHash" -ForegroundColor Green
 
-# Build a single-file first-install executable with the signed agent package embedded inside it.
-Write-Host 'Building single-file Windows installer...' -ForegroundColor Cyan
+# Build a single-file first-install/in-place-repair executable with the signed agent package embedded inside it.
+Write-Host 'Building single-file Windows installer and repair package...' -ForegroundColor Cyan
 $installerPayload=Join-Path $root 'src\AppControlManager.Installer\Payload\agent-payload.zip'
 New-Item -ItemType Directory -Path (Split-Path $installerPayload -Parent) -Force | Out-Null
 Copy-Item $package $installerPayload -Force
