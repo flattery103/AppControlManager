@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.17.1")
+app = FastAPI(title="AppControl Manager Server", version="0.17.2")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -1517,7 +1517,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.17.1</div></aside>"
+        + "</div><div class='side-footer'>Server 0.17.2</div></aside>"
     )
 
 
@@ -1915,7 +1915,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.17.1"}
+    return {"ok": True, "version": "0.17.2"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -2272,19 +2272,21 @@ def finish_installation_request(installation_id:int, req:InstallationStartIn, de
 
 @app.post("/api/installations/{installation_id}/report")
 def report_installation(installation_id:int, req:InstallationReportIn, device_id:str=Depends(agent_auth)):
-    allowed={'starting','active','ending','completed','failed'}
+    allowed={'starting','active','ending','completed','completed_with_warnings','failed'}
     status_value=(req.status or '').strip().lower()
     if status_value not in allowed: raise HTTPException(status_code=400,detail="Invalid installation status report.")
     with db() as conn:
         row=conn.execute("SELECT * FROM installation_requests WHERE id=? AND device_id=?",(installation_id,device_id)).fetchone()
         if not row: raise HTTPException(status_code=404,detail="Installation request not found")
-        completed=req.completed_at or (utcnow() if status_value in {'completed','failed'} else row['completed_at'])
+        if row['status'] in {'completed','completed_with_warnings','failed'}:
+            return {'ok':True,'ignored':True,'status':row['status']}
+        completed=req.completed_at or (utcnow() if status_value in {'completed','completed_with_warnings','failed'} else row['completed_at'])
         conn.execute("""UPDATE installation_requests SET status=?,started_at=COALESCE(?,started_at),ends_at=COALESCE(?,ends_at),completed_at=?,decision_note=COALESCE(?,decision_note) WHERE id=?""",
                      (status_value,req.started_at,req.ends_at,completed,req.detail,installation_id))
         d=conn.execute('SELECT organization_id FROM devices WHERE id=?',(device_id,)).fetchone()
         if status_value == 'active':
             conn.execute("UPDATE devices SET learning_mode=1,policy_mode='learning' WHERE id=?",(device_id,))
-        elif status_value in {'completed','failed'}:
+        elif status_value in {'completed','completed_with_warnings','failed'}:
             conn.execute("UPDATE devices SET learning_mode=0,policy_mode='enforcement' WHERE id=?",(device_id,))
         audit(conn,'endpoint','installation_'+status_value,organization_id=d['organization_id'] if d else None,device_id=device_id,object_type='installation_request',object_id=installation_id,detail=req.detail)
     return {'ok':True}
@@ -3403,6 +3405,18 @@ def requests_page(q:str='', request_status:str='', organization_id:str='', reque
     installation_rendered=[]
     for i in install_rows:
         status_text=(i['status'] or 'unknown').replace('_',' ').title()
+        status_class={
+            'completed':'badge-ok',
+            'completed_with_warnings':'badge-warn',
+            'failed':'badge-bad',
+            'denied':'badge-bad',
+            'expired':'badge-warn',
+            'pending':'badge-warn',
+            'approved':'badge-ok',
+            'starting':'badge-info',
+            'active':'badge-info',
+            'ending':'badge-info',
+        }.get(i['status'],'')
         app=escape(i['product_name'] or filename(i['file_path']) or 'Installation request')
         when=display_time(i['created_at'])
         action=''
@@ -3412,7 +3426,7 @@ def requests_page(q:str='', request_status:str='', organization_id:str='', reque
             action=f"<span class='muted'>Approved for {i['duration_minutes'] or 15} minutes. Waiting for the user to click Start Installation.</span>"
         else:
             action=f"<span class='muted'>{escape(i['decision_note'] or '')}</span>"
-        installation_rendered.append(f"<tr><td><b>{app}</b><div class='muted'><code>{escape(i['file_path'] or '')}</code></div></td><td><a href='/devices/{i['device_id']}'>{escape(i['hostname'])}</a></td><td>{escape(i['requested_by'] or 'Administrator')}</td><td>{escape(when)}</td><td><span class='badge'>{escape(status_text)}</span></td><td>{action}</td></tr>")
+        installation_rendered.append(f"<tr><td><b>{app}</b><div class='muted'><code>{escape(i['file_path'] or '')}</code></div></td><td><a href='/devices/{i['device_id']}'>{escape(i['hostname'])}</a></td><td>{escape(i['requested_by'] or 'Administrator')}</td><td>{escape(when)}</td><td><span class='badge {status_class}'>{escape(status_text)}</span></td><td>{action}</td></tr>")
     installation_panel=f"<datalist id='installation-durations'><option value='15'><option value='30'><option value='60'></datalist><div class='section-head'><h2>Installation Requests</h2><span class='muted'>Admin approval grants a four-hour activation window; the timed Installation Mode starts only when the endpoint user clicks Start Installation.</span></div><div class='card'><table><tr><th>Installer / application</th><th>Device</th><th>Requested by</th><th>Requested</th><th>Status</th><th>Action</th></tr>{''.join(installation_rendered) or '<tr><td colspan=6><div class=empty>No installation requests.</div></td></tr>'}</table></div>"
     params_nav={'q':q,'request_status':request_status,'organization_id':organization_id,'request_kind':request_kind,'period':period,'sort':sort}
     body=f"{installation_panel}{summary}<div class='section-head'><h2>Request Queue & History</h2><span class='muted'>{total} match current filters</span></div>{filters}{table}{pager('/requests',page_num,total,params_nav)}"

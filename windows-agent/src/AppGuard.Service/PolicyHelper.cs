@@ -540,9 +540,10 @@ public sealed class PolicyHelper
         _log.Write("enforcement-progress completed");
     }
 
-    public async Task FinalizeInstallationModeAsync(long installationId, CancellationToken ct)
+    public async Task<InstallationFinalizationResult> FinalizeInstallationModeAsync(long installationId, CancellationToken ct)
     {
         _log.Write($"installation-finalize started id={installationId}");
+        InstallationFinalizationResult? result = null;
         Interlocked.Increment(ref _foregroundWaiters);
         try
         {
@@ -553,8 +554,6 @@ public sealed class PolicyHelper
                 await RunPowerShellAsync(collectScript, "-Save", ct);
                 var learned = ReadLearnedApplications();
                 var prep = _backgroundStore.PrepareLearningEvents(learned);
-                if (prep.Unpreparable > 0)
-                    throw new InvalidOperationException($"Installation Mode learned {prep.Unpreparable} application(s) that could not be converted into safe authorization candidates.");
 
                 var paths = learned.Select(x => x.FilePath ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var requiredKeys = _backgroundStore.LearningRuleKeysForPaths(paths);
@@ -581,8 +580,10 @@ public sealed class PolicyHelper
                     .Where(x => x.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(x.FragmentXmlPath) && File.Exists(x.FragmentXmlPath))
                     .ToArray();
                 if (ready.Length != requiredKeys.Count) unresolved += Math.Max(0, requiredKeys.Count - ready.Length - unresolved);
-                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} unresolved={unresolved}");
+                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} skipped={prep.Unpreparable} unresolved={unresolved}");
                 if (unresolved > 0) throw new InvalidOperationException($"Installation Mode has {unresolved} unresolved learned authorization fragment(s).");
+                if (learned.Count > 0 && ready.Length == 0 && prep.Unpreparable > 0)
+                    throw new InvalidOperationException($"Installation Mode learned {prep.Unpreparable} file(s), but none could be converted into safe authorization rules.");
 
                 if (ready.Length > 0)
                 {
@@ -599,11 +600,19 @@ public sealed class PolicyHelper
                 }
 
                 await ForceEnforcementCoreAsync(ct);
+                result = new InstallationFinalizationResult
+                {
+                    LearnedCount = learned.Count,
+                    InstalledRuleCount = ready.Length,
+                    SkippedCount = prep.Unpreparable
+                };
             }
             finally { _policyGenerationGate.Release(); }
         }
         finally { Interlocked.Decrement(ref _foregroundWaiters); }
-        _log.Write($"installation-finalize completed id={installationId}");
+        var completed = result ?? throw new InvalidOperationException("Installation Mode finalization did not produce a result.");
+        _log.Write($"installation-finalize completed id={installationId} learned={completed.LearnedCount} installed={completed.InstalledRuleCount} skipped={completed.SkippedCount}");
+        return completed;
     }
 
     public async Task ForceEnforcementAsync(CancellationToken ct)

@@ -55,3 +55,11 @@ public sealed class InstallationReportRequest
     [JsonPropertyName("completed_at")] public string? CompletedAt { get; set; }
     [JsonPropertyName("detail")] public string? Detail { get; set; }
 }
+
+public sealed class InstallationFinalizationResult
+{
+    public int LearnedCount { get; init; }
+    public int InstalledRuleCount { get; init; }
+    public int SkippedCount { get; init; }
+    public bool HasWarnings => SkippedCount > 0;
+}

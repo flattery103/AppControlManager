@@ -51,11 +51,15 @@ public sealed class InstallationModeManager
             var completed = DateTimeOffset.UtcNow.ToString("O");
             try
             {
-                await _policies.FinalizeInstallationModeAsync(state.InstallationId, ct);
+                var finalization = await _policies.FinalizeInstallationModeAsync(state.InstallationId, ct);
                 state.Active = false;
                 _store.Write(state);
-                await ReportOrQueueAsync(state, "completed", $"Installation Mode completed ({reason}). Enforcement restored.", completed, ct);
-                _log.Write($"installation-mode completed id={state.InstallationId} reason={reason}");
+                var status = finalization.HasWarnings ? "completed_with_warnings" : "completed";
+                var detail = finalization.HasWarnings
+                    ? $"Installation Mode completed with warnings ({reason}). Enforcement restored. Processed {finalization.LearnedCount} learned file(s); installed {finalization.InstalledRuleCount} safe authorization rule(s); skipped {finalization.SkippedCount} temporary or unverifiable file(s)."
+                    : $"Installation Mode completed ({reason}). Enforcement restored. Installed {finalization.InstalledRuleCount} safe authorization rule(s).";
+                await ReportOrQueueAsync(state, status, detail, completed, ct);
+                _log.Write($"installation-mode {status} id={state.InstallationId} reason={reason} learned={finalization.LearnedCount} installed={finalization.InstalledRuleCount} skipped={finalization.SkippedCount}");
             }
             catch (Exception finalizeError)
             {
@@ -86,6 +90,13 @@ public sealed class InstallationModeManager
     {
         var state = _store.Read();
         if (string.IsNullOrWhiteSpace(state.PendingReportStatus) || state.InstallationId <= 0) return;
+        if (!state.Active && IsNonTerminalReport(state.PendingReportStatus))
+        {
+            _log.Write($"installation report discarded stale status={state.PendingReportStatus} id={state.InstallationId}");
+            ClearPendingReport(state);
+            _store.Write(state);
+            return;
+        }
         try
         {
             await _api.ReportInstallationAsync(state.InstallationId, new InstallationReportRequest
@@ -94,7 +105,7 @@ public sealed class InstallationModeManager
                 StartedAt = state.PendingReportStartedAt, EndsAt = state.PendingReportEndsAt,
                 CompletedAt = state.PendingReportCompletedAt
             }, ct);
-            state.PendingReportStatus = state.PendingReportDetail = state.PendingReportStartedAt = state.PendingReportEndsAt = state.PendingReportCompletedAt = null;
+            ClearPendingReport(state);
             _store.Write(state);
         }
         catch (Exception ex) { _log.Write("installation report retry: " + ex.Message); }
@@ -103,7 +114,12 @@ public sealed class InstallationModeManager
     private async Task ReportOrQueueAsync(InstallationModeState state, string status, string detail, string? completedAt, CancellationToken ct)
     {
         var report = new InstallationReportRequest { Status=status, Detail=detail, StartedAt=state.StartedAt, EndsAt=state.EndsAt, CompletedAt=completedAt };
-        try { await _api.ReportInstallationAsync(state.InstallationId, report, ct); }
+        try
+        {
+            await _api.ReportInstallationAsync(state.InstallationId, report, ct);
+            ClearPendingReport(state);
+            _store.Write(state);
+        }
         catch (Exception ex)
         {
             state.PendingReportStatus=status; state.PendingReportDetail=detail; state.PendingReportStartedAt=state.StartedAt;
@@ -111,4 +127,10 @@ public sealed class InstallationModeManager
             _log.Write("installation report deferred: " + ex.Message);
         }
     }
+
+    private static bool IsNonTerminalReport(string? status)
+        => status is "starting" or "active" or "ending";
+
+    private static void ClearPendingReport(InstallationModeState state)
+        => state.PendingReportStatus = state.PendingReportDetail = state.PendingReportStartedAt = state.PendingReportEndsAt = state.PendingReportCompletedAt = null;
 }

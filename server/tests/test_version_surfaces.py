@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "0.17.1"
+VERSION = "0.17.2"
 
 
 class VersionSurfaceTests(unittest.TestCase):
@@ -21,6 +21,7 @@ class VersionSurfaceTests(unittest.TestCase):
         self.assertIn(f"[string]$Version='{VERSION}'", build)
         self.assertGreaterEqual(workflow.count(VERSION), 3)
         for rel in (
+            "windows-agent/src/AppGuard.Core/AppGuard.Core.csproj",
             "windows-agent/src/AppGuard.Service/AppGuard.Service.csproj",
             "windows-agent/src/AppGuard.Tray/AppGuard.Tray.csproj",
             "windows-agent/src/AppControlManager.Installer/AppControlManager.Installer.csproj",
@@ -43,7 +44,7 @@ class VersionSurfaceTests(unittest.TestCase):
 
     def test_release_documentation_describes_integrated_milestone_and_signing_secrets(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        feature_path = ROOT / "0.17.1-FIXES.txt"
+        feature_path = ROOT / "0.17.2-FIXES.txt"
         self.assertTrue(feature_path.is_file())
         self.assertTrue(readme.startswith(f"# AppControl Manager {VERSION}"))
         for secret in (
@@ -57,11 +58,11 @@ class VersionSurfaceTests(unittest.TestCase):
             self.assertIn(secret, readme)
         features = feature_path.read_text(encoding="utf-8")
         for phrase in (
-            "PowerShell",
-            "1639",
-            "staged",
-            "Rule Worker",
-            "installer",
+            "Installation Mode",
+            "Completed with warnings",
+            "temporary",
+            "safe authorization",
+            "Enforcement",
         ):
             self.assertIn(phrase, features)
 

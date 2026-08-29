@@ -1,0 +1,19 @@
+AppControl Manager 0.17.2
+
+Installation Mode partial-learning repair
+
+- Installation Mode no longer discards every valid learned authorization rule when
+  temporary or deleted installer files cannot be converted into safe candidates.
+- Finalization now generates and installs all safe authorization rules before
+  returning the endpoint to Enforcement.
+- Temporary or unverifiable learned files are counted and reported separately.
+- A mixed result is recorded as Completed with warnings instead of Failed when
+  safe authorization rules were installed and Enforcement was restored.
+- A session still fails safely when learning activity produced no usable safe
+  authorization rules, a valid fragment could not be installed, or Enforcement
+  could not be restored.
+- Installation Request history shows Completed With Warnings with a warning badge
+  and retains the processed, installed, and skipped counts for review.
+
+This release preserves the fail-closed safety boundary: skipped files are never
+silently authorized, and Enforcement restoration remains mandatory.
