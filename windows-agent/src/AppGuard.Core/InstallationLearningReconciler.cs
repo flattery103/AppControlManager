@@ -6,6 +6,7 @@ public sealed class InstallationLearningPlan
 {
     public IReadOnlyList<string> RequiredRuleKeys { get; init; } = [];
     public int SkippedCount { get; init; }
+    public int IgnoredEphemeralCount { get; init; }
 }
 
 public static class InstallationLearningReconciler
@@ -15,7 +16,8 @@ public static class InstallationLearningReconciler
         IReadOnlyDictionary<string, string> preparedRuleKeysByPath,
         IEnumerable<LearningRuleReference> existingReferences,
         ISet<string> readyRuleKeys,
-        Func<string, bool> isAvailable)
+        Func<string, bool> isAvailable,
+        Func<string, bool>? isExpectedEphemeral = null)
     {
         var references = existingReferences
             .Where(x => x.RecordId.HasValue && !string.IsNullOrWhiteSpace(x.FilePath) && !string.IsNullOrWhiteSpace(x.RuleKey))
@@ -23,12 +25,18 @@ public static class InstallationLearningReconciler
         var learned = learnedFiles.ToArray();
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skipped = learned.Count(x => string.IsNullOrWhiteSpace(x.FilePath));
+        var ignoredEphemeral = 0;
 
         foreach (var group in learned
                      .Where(x => !string.IsNullOrWhiteSpace(x.FilePath))
                      .GroupBy(x => x.FilePath!.Trim(), StringComparer.OrdinalIgnoreCase))
         {
             var path = group.Key;
+            if (isExpectedEphemeral?.Invoke(path) == true)
+            {
+                ignoredEphemeral++;
+                continue;
+            }
 
             if (preparedRuleKeysByPath.TryGetValue(path, out var preparedKey) &&
                 !string.IsNullOrWhiteSpace(preparedKey) &&
@@ -55,7 +63,8 @@ public static class InstallationLearningReconciler
         return new InstallationLearningPlan
         {
             RequiredRuleKeys = required.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
-            SkippedCount = skipped
+            SkippedCount = skipped,
+            IgnoredEphemeralCount = ignoredEphemeral
         };
     }
 

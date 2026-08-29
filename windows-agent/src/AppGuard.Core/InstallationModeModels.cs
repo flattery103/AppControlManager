@@ -61,5 +61,6 @@ public sealed class InstallationFinalizationResult
     public int LearnedCount { get; init; }
     public int InstalledRuleCount { get; init; }
     public int SkippedCount { get; init; }
+    public int IgnoredEphemeralCount { get; init; }
     public bool HasWarnings => SkippedCount > 0;
 }

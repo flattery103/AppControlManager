@@ -27,6 +27,9 @@ jobs:
       - name: Run Windows core behavior tests
         shell: powershell
         run: dotnet run --project .\windows-agent\tests\AppGuard.Core.BehaviorTests\AppGuard.Core.BehaviorTests.csproj -c Release
+      - name: Run installed-policy validation behavior tests
+        shell: powershell
+        run: .\.github\tests\Test-InstalledPolicyValidation.ps1
 
       - name: Determine version
         shell: powershell
@@ -34,6 +37,10 @@ jobs:
           $version = "${{ github.ref_name }}" -replace '^v',''
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Unable to determine release version from tag.' }
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run GitHub Release publication probe tests
+        shell: powershell
+        run: .\.github\tests\Test-Publish-GitHubRelease.ps1
 
       - name: Build Windows executables for signing
         shell: powershell
@@ -110,16 +117,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = Get-ChildItem release -File | ForEach-Object { $_.FullName }
-          $tag = "${{ github.ref_name }}"
-          & gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            & gh release upload $tag @assets --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'GitHub release asset upload failed.' }
-            & gh release edit $tag --title "AppControl Manager $env:VERSION" --latest
-            if ($LASTEXITCODE -ne 0) { throw 'GitHub release update failed.' }
-          }
-          else {
-            & gh release create $tag @assets --title "AppControl Manager $env:VERSION" --generate-notes --verify-tag
-            if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
-          }
+          .\.github\scripts\Publish-GitHubRelease.ps1 -Tag "${{ github.ref_name }}" -Version "$env:VERSION" -AssetsDirectory "$env:GITHUB_WORKSPACE\release"

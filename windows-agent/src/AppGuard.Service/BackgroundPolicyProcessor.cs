@@ -17,7 +17,7 @@ public sealed class BackgroundPolicyProcessor
         _log = log;
     }
 
-    public (int Pending, int Failed, string Status) QueueStatus() => _store.QueueStatus();
+    public BackgroundPolicyQueueStatus QueueStatus() => _store.QueueStatus();
 
     public async Task<bool> ProcessOneAsync(CancellationToken ct)
     {

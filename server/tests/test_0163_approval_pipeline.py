@@ -13,27 +13,30 @@ class Release0163ApprovalPipelineTests(unittest.TestCase):
     def text(self, rel):
         return (ROOT / rel).read_text(encoding='utf-8')
 
-    def test_foreground_approval_uses_primary_policy_builder_not_full_bundle_helper(self):
+    def test_foreground_approval_uses_rule_worker_then_local_system_installer(self):
         text = self.text('windows-agent/src/AppGuard.Service/PolicyHelper.cs')
-        self.assertIn('New-PrimaryApprovalPolicy.ps1', text)
+        self.assertIn('GenerateAsync("primary_allow"', text)
+        self.assertIn('Install-GeneratedPolicy.ps1', text)
+        self.assertNotIn('New-PrimaryApprovalPolicy.ps1', text)
         self.assertIn('QueueBackgroundBundle', text)
         self.assertNotIn('Building and installing the Windows App Control policy for {files.Length} file(s)', text)
 
     def test_foreground_primary_path_is_single_file(self):
         helper = self.text('windows-agent/src/AppGuard.Service/PolicyHelper.cs')
-        primary_script = self.text('windows-agent/scripts/New-PrimaryApprovalPolicy.ps1')
+        primary_script = self.text('windows-agent/scripts/New-WorkerPolicy.ps1')
         self.assertIn('primaryFile', helper)
-        self.assertIn('files=1', primary_script)
-        self.assertIn('New-PrimaryApprovalPolicy.ps1', helper)
+        self.assertIn("ValidateSet('primary_allow','deny_policy')", primary_script)
+        self.assertIn('GenerateAsync("primary_allow", primaryFile', helper)
         foreground_section = helper[helper.index('ApproveFilesAsync'):helper.index('ExpandProtectedApplicationBundles')]
         self.assertNotIn('JsonSerializer.Serialize(files)', foreground_section)
 
     def test_primary_policy_prefers_product_name_filepublisher_for_safe_signed_file(self):
-        text = self.text('windows-agent/scripts/New-PrimaryApprovalPolicy.ps1')
-        self.assertIn('SpecificFileNameLevel ProductName', text)
-        self.assertIn('Test-AppGuardProductFamilyCandidate', text)
-        self.assertIn('ACM_STAGE primary-rule-generation', text)
-        self.assertIn('ACM_STAGE primary-policy-install', text)
+        generation = self.text('windows-agent/scripts/New-WorkerPolicy.ps1')
+        install = self.text('windows-agent/scripts/Install-GeneratedPolicy.ps1')
+        self.assertIn('SpecificFileNameLevel ProductName', generation)
+        self.assertIn('Test-AppGuardProductFamilyCandidate', generation)
+        self.assertIn('ACM_STAGE worker-policy-generation', generation)
+        self.assertIn('ACM_STAGE generated-policy-install', install)
 
     def test_background_queue_is_durable_and_has_required_states(self):
         model = self.text('windows-agent/src/AppGuard.Core/BackgroundPolicyModels.cs')

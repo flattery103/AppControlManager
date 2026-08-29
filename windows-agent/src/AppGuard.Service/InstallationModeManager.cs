@@ -57,9 +57,9 @@ public sealed class InstallationModeManager
                 var status = finalization.HasWarnings ? "completed_with_warnings" : "completed";
                 var detail = finalization.HasWarnings
                     ? $"Installation Mode completed with warnings ({reason}). Enforcement restored. Processed {finalization.LearnedCount} learned file(s); installed {finalization.InstalledRuleCount} safe authorization rule(s); skipped {finalization.SkippedCount} temporary or unverifiable file(s)."
-                    : $"Installation Mode completed ({reason}). Enforcement restored. Installed {finalization.InstalledRuleCount} safe authorization rule(s).";
+                    : $"Installation Mode completed ({reason}). Enforcement restored. Installed {finalization.InstalledRuleCount} safe authorization rule(s); ignored {finalization.IgnoredEphemeralCount} expected .NET extraction file(s).";
                 await ReportOrQueueAsync(state, status, detail, completed, ct);
-                _log.Write($"installation-mode {status} id={state.InstallationId} reason={reason} learned={finalization.LearnedCount} installed={finalization.InstalledRuleCount} skipped={finalization.SkippedCount}");
+                _log.Write($"installation-mode {status} id={state.InstallationId} reason={reason} learned={finalization.LearnedCount} installed={finalization.InstalledRuleCount} ignoredEphemeral={finalization.IgnoredEphemeralCount} skipped={finalization.SkippedCount}");
             }
             catch (Exception finalizeError)
             {

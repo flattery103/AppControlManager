@@ -1,4 +1,12 @@
-# AppControl Manager 0.17.2
+# AppControl Manager 0.18.0
+
+## 0.18.0 Consolidated Reliability Release
+
+Version 0.18.0 repairs automatic GitHub Release creation, routes foreground allow and deny generation through the constrained Local Service Rule Worker, adds administrator retry and bounded diagnostics for failed background policy work, removes only stale failed or abandoned worker jobs, and narrowly classifies expected `.NET` single-file extraction children during learning. LocalSystem remains the only process allowed to post-process, convert, install, remove, refresh, or verify WDAC policies.
+
+The `.NET` classifier is deliberately fail-closed: it recognizes only `.net\<application>\<bundle-id>\<child>` below a user's `AppData\Local\Temp` or `Windows\Temp`. It does not ignore arbitrary temporary, NSIS, MSI, traversal, or other similarly named paths. Recognized extraction files are reported separately and do not create warnings, but a non-empty learning session with no usable safe authorization rule still fails.
+
+The required rollout proof is one managed endpoint upgrade from 0.17.2 to 0.18.0, followed by signed-binary and service checks plus foreground allow/deny, Installation Mode, retry, heartbeat, and Enforcement-restoration tests. Retain the published 0.17.2 source and signed assets for immediate rollback; 0.16.2 remains the older architectural reference.
 
 ## 0.17.2 Installation Mode Learning Repair
 
@@ -57,7 +65,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.17.2`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.0`:
 
 ```text
 AZURE_CLIENT_ID

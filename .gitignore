@@ -1,1 +1,8 @@
 .worktrees/
+.venv/
+__pycache__/
+*.py[cod]
+**/bin/
+**/obj/
+windows-agent/publish/
+.superpowers/

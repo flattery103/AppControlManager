@@ -198,14 +198,52 @@ public sealed class BackgroundPolicyStore
         return WithSnapshot(snapshot => snapshot.Rules.Where(x => wanted.Contains(x.CacheKey)).Select(Clone).ToList());
     }
 
-    public (int Pending, int Failed, string Status) QueueStatus()
+    public BackgroundPolicyQueueStatus QueueStatus()
         => WithSnapshot(snapshot =>
         {
-            var pending = snapshot.Rules.Count(x => x.Status is BackgroundPolicyStatuses.Queued or BackgroundPolicyStatuses.Processing or BackgroundPolicyStatuses.Superseded)
-                          + snapshot.Bundles.Count(x => x.Status is BackgroundPolicyStatuses.Queued or BackgroundPolicyStatuses.Processing);
-            var failed = snapshot.Rules.Count(x => x.Status == BackgroundPolicyStatuses.Failed) + snapshot.Bundles.Count(x => x.Status == BackgroundPolicyStatuses.Failed);
-            var status = failed > 0 ? "failed" : pending > 0 ? "processing" : "idle";
-            return (pending, failed, status);
+            var pendingRules = snapshot.Rules.Where(x => x.Status is BackgroundPolicyStatuses.Queued or BackgroundPolicyStatuses.Processing or BackgroundPolicyStatuses.Superseded).ToArray();
+            var pendingBundles = snapshot.Bundles.Where(x => x.Status is BackgroundPolicyStatuses.Queued or BackgroundPolicyStatuses.Processing).ToArray();
+            var failedRules = snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Failed).ToArray();
+            var failedBundles = snapshot.Bundles.Where(x => x.Status == BackgroundPolicyStatuses.Failed).ToArray();
+            var pending = pendingRules.Length + pendingBundles.Length;
+            var failed = failedRules.Length + failedBundles.Length;
+            var oldest = pendingRules.Select(x => x.UpdatedAt).Concat(pendingBundles.Select(x => x.UpdatedAt))
+                .Where(x => !string.IsNullOrWhiteSpace(x)).OrderBy(x => x, StringComparer.Ordinal).FirstOrDefault();
+            var lastError = failedRules.Select(x => (x.UpdatedAt, x.LastError)).Concat(failedBundles.Select(x => (x.UpdatedAt, x.LastError)))
+                .Where(x => !string.IsNullOrWhiteSpace(x.LastError)).OrderByDescending(x => x.UpdatedAt, StringComparer.Ordinal)
+                .Select(x => Limit(x.LastError!, 1000)).FirstOrDefault();
+            return new BackgroundPolicyQueueStatus
+            {
+                Pending = pending,
+                Failed = failed,
+                Status = failed > 0 ? "failed" : pending > 0 ? "processing" : "idle",
+                OldestPendingAt = oldest,
+                LastError = lastError
+            };
+        });
+
+    public BackgroundPolicyRetryResult RetryFailedWork()
+        => Mutate(snapshot =>
+        {
+            var rules = 0;
+            var bundles = 0;
+            foreach (var rule in snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Failed))
+            {
+                rule.Status = BackgroundPolicyStatuses.Queued;
+                rule.Attempts = 0;
+                rule.LastError = null;
+                rule.UpdatedAt = Now();
+                rules++;
+            }
+            foreach (var bundle in snapshot.Bundles.Where(x => x.Status == BackgroundPolicyStatuses.Failed))
+            {
+                bundle.Status = BackgroundPolicyStatuses.Queued;
+                bundle.Attempts = 0;
+                bundle.LastError = null;
+                bundle.UpdatedAt = Now();
+                bundles++;
+            }
+            return new BackgroundPolicyRetryResult { RulesReset = rules, BundlesReset = bundles };
         });
 
     public LearningPreparationStats PrepareLearningEvents(IEnumerable<EventUpload> events)
@@ -216,6 +254,7 @@ public sealed class BackgroundPolicyStore
             stats.Observed++;
             var filePath = (item.FilePath ?? string.Empty).Trim();
             if (filePath.Length == 0) { stats.Unpreparable++; continue; }
+            if (LearnedPathClassifier.IsExpectedDotNetExtraction(filePath)) { stats.IgnoredEphemeral++; continue; }
             if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }
             RuleCacheEntry? prepared = null;
             var publisher = (item.Publisher ?? string.Empty).Trim();
@@ -313,4 +352,5 @@ public sealed class BackgroundPolicyStore
     private BackgroundBundleJob Clone(BackgroundBundleJob value) => JsonSerializer.Deserialize<BackgroundBundleJob>(JsonSerializer.Serialize(value, _json), _json)!;
     private BackgroundBundleMember Clone(BackgroundBundleMember value) => JsonSerializer.Deserialize<BackgroundBundleMember>(JsonSerializer.Serialize(value, _json), _json)!;
     private static string Now() => DateTimeOffset.UtcNow.ToString("O");
+    private static string Limit(string value, int max) => value.Length <= max ? value : value[..max];
 }

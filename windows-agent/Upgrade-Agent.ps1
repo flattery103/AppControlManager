@@ -23,14 +23,14 @@ $trustHelper=Join-Path $trustRoot 'New-SupplementalForFiles.ps1'
 $basePolicy=Join-Path $trustRoot 'Policies\BasePolicy.xml'
 $binaryList=@($serviceExe,$trayExe)
 $preauthPolicyId=$null
-Write-Host 'Preparing AppControl Manager 0.17.2 binaries for the current enforcement policy...'
+Write-Host 'Preparing AppControl Manager 0.18.0 binaries for the current enforcement policy...'
 if((Test-Path $trustHelper) -and (Test-Path $basePolicy)) {
     try {
-        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 0.17.2 Core Binaries' -AsObject -AlreadyExpanded
+        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 0.18.0 Core Binaries' -AsObject -AlreadyExpanded
         $preauthPolicyId=[string]$trustResult.policy_id
         Write-Host "Created supplemental allow policy for the new service/tray binaries: $preauthPolicyId" -ForegroundColor Green
     } catch {
-        throw "Could not pre-authorize the 0.17.2 binaries: $($_.Exception.Message)"
+        throw "Could not pre-authorize the 0.18.0 binaries: $($_.Exception.Message)"
     }
 }
 
@@ -58,7 +58,7 @@ foreach($grant in @('*S-1-5-18:(OI)(CI)(F)','*S-1-5-32-544:(OI)(CI)(F)','*S-1-5-
 }
 New-Item -ItemType Directory -Path "$programData\RuleWorker\Jobs" -Force | Out-Null
 if(-not [string]::IsNullOrWhiteSpace($preauthPolicyId)) {
-    [ordered]@{ version='0.17.2'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
+    [ordered]@{ version='0.18.0'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
 }
 
 Copy-Item "$PSScriptRoot\scripts\*.ps1" "$programFiles\Scripts\" -Force
@@ -87,6 +87,6 @@ do {
 } while((Get-Date) -lt $workerDeadline)
 if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager endpoint upgraded to 0.17.2.' -ForegroundColor Green
+Write-Host 'AppControl Manager endpoint upgraded to 0.18.0.' -ForegroundColor Green
 Write-Host 'Enrollment, state, learned data, block cache, logs and installed Windows App Control policies were preserved.'
 Write-Host 'Legacy AppGuardPOC folders were retained for rollback but are no longer used.' -ForegroundColor Yellow

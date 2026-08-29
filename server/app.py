@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.17.2")
+app = FastAPI(title="AppControl Manager Server", version="0.18.0")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -420,6 +420,8 @@ def init_db():
         ensure_column(conn, "devices", "background_policy_status", "TEXT")
         ensure_column(conn, "devices", "background_policy_pending", "INTEGER")
         ensure_column(conn, "devices", "background_policy_failed", "INTEGER")
+        ensure_column(conn, "devices", "background_policy_error", "TEXT")
+        ensure_column(conn, "devices", "background_policy_oldest_at", "TEXT")
         ensure_column(conn, "devices", "offboard_status", "TEXT")
         ensure_column(conn, "devices", "offboard_result", "TEXT")
         ensure_column(conn, "devices", "offboard_requested_at", "TEXT")
@@ -1226,6 +1228,8 @@ class HeartbeatRequest(BaseModel):
     background_policy_status: Optional[str] = None
     background_policy_pending: Optional[int] = None
     background_policy_failed: Optional[int] = None
+    background_policy_error: Optional[str] = Field(default=None, max_length=1000)
+    background_policy_oldest_at: Optional[str] = Field(default=None, max_length=80)
 
 
 class EventIn(BaseModel):
@@ -1517,7 +1521,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.17.2</div></aside>"
+        + "</div><div class='side-footer'>Server 0.18.0</div></aside>"
     )
 
 
@@ -1915,7 +1919,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.17.2"}
+    return {"ok": True, "version": "0.18.0"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -1958,12 +1962,17 @@ def heartbeat(req: HeartbeatRequest, device_id: str = Depends(agent_auth)):
                update_status=COALESCE(?,update_status),update_result=COALESCE(?,update_result),
                background_policy_status=COALESCE(?,background_policy_status),
                background_policy_pending=COALESCE(?,background_policy_pending),
-               background_policy_failed=COALESCE(?,background_policy_failed) WHERE id=?""",
+               background_policy_failed=COALESCE(?,background_policy_failed),
+               background_policy_error=CASE WHEN ? THEN ? ELSE background_policy_error END,
+               background_policy_oldest_at=CASE WHEN ? THEN ? ELSE background_policy_oldest_at END WHERE id=?""",
             (
                 utcnow(), 1 if learning else 0, mode,
                 None if req.script_enforcement_disabled is None else (1 if req.script_enforcement_disabled else 0),
                 req.agent_version, req.os_version, req.update_status, req.update_result,
-                req.background_policy_status, req.background_policy_pending, req.background_policy_failed, device_id,
+                req.background_policy_status, req.background_policy_pending, req.background_policy_failed,
+                1 if "background_policy_error" in req.model_fields_set else 0, req.background_policy_error,
+                1 if "background_policy_oldest_at" in req.model_fields_set else 0, req.background_policy_oldest_at,
+                device_id,
             ),
         )
         if req.update_status in {'installed','rolled_back','failed'}:
@@ -3498,6 +3507,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         requests=conn.execute("SELECT * FROM approval_requests WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         events=conn.execute("SELECT * FROM events WHERE device_id=? ORDER BY id DESC LIMIT 150",(device_id,)).fetchall()
         commands=conn.execute("SELECT * FROM commands WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
+        command_busy=any(c['status'] in {'pending','processing'} for c in commands)
         audits=conn.execute("SELECT * FROM audit_log WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         _expire_installation_approvals(conn,device_id)
         installation=conn.execute("SELECT * FROM installation_requests WHERE device_id=? ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
@@ -3580,7 +3590,10 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     background_status=(d['background_policy_status'] or ('failed' if background_failed else 'processing' if background_pending else 'idle')).replace('_',' ').title()
     background_panel=''
     if background_pending or background_failed:
-        background_panel=f"<div class='panel'><h2>Background Policy Work</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Status</span><b>{escape(background_status)}</b></div><div class='detail-item'><span class='muted'>Pending</span><b>{background_pending}</b></div><div class='detail-item'><span class='muted'>Failed</span><b>{background_failed}</b></div></div><p class='muted'>Primary approvals remain installed while AppControl Manager prepares auxiliary application coverage.</p></div>"
+        background_error=(d['background_policy_error'] or '').strip()
+        oldest_background=display_time(d['background_policy_oldest_at']) if d['background_policy_oldest_at'] else ''
+        retry_action=(f"<form class='actions' method='post' action='/admin/devices/{device_id}/background-policy/retry'><button class='btn-warning'>Retry Failed Background Work</button></form>" if principal.can_approve and background_failed > 0 and not command_busy else '')
+        background_panel=f"<div class='panel'><h2>Background Policy Work</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Status</span><b>{escape(background_status)}</b></div><div class='detail-item'><span class='muted'>Pending</span><b>{background_pending}</b></div><div class='detail-item'><span class='muted'>Failed</span><b>{background_failed}</b></div><div class='detail-item'><span class='muted'>Oldest pending</span>{escape(oldest_background or '—')}</div></div>"+(f"<div class='notice-warn'><b>Last background error</b><div>{escape(background_error)}</div></div>" if background_error else '')+f"{retry_action}<p class='muted'>Primary approvals remain installed while AppControl Manager prepares auxiliary application coverage.</p></div>"
     jump="<div class='actions no-print' style='margin-bottom:18px'><a class='button btn-quiet' href='#policies'>Effective Policies</a><a class='button btn-quiet' href='#activity'>Activity</a><a class='button btn-quiet' href='#approved-apps'>Approvals</a><a class='button btn-quiet' href='#blocked-apps'>Blocks</a><a class='button btn-quiet' href='#requests'>Requests</a></div>"
     body=f"""<div class='grid'><div class='stat'><span class='stat-label'>Organization</span><b style='font-size:18px'>{escape(d['organization_name'] or '')}</b></div><div class='stat'><span class='stat-label'>Device Group</span><b style='font-size:18px'>{escape(d['group_name'] or 'None')}</b></div><div class='stat'><span class='stat-label'>App Control Mode</span><b style='font-size:18px'>{escape(mode_name)}</b></div><div class='stat'><span class='stat-label'>Agent Version</span><b style='font-size:18px'>{escape(d['agent_version'] or '')}</b></div></div>
 {jump}{control_panel}{background_panel}
@@ -4974,6 +4987,20 @@ def enable_device_enforcement(device_id:str, principal:Principal=Depends(admin_a
         require_org_access(principal,d['organization_id'])
         if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
         conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',(device_id,'enable_enforcement',json.dumps({'requested_by':principal.username}),'pending',utcnow()))
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
+
+
+@app.post('/admin/devices/{device_id}/background-policy/retry')
+def retry_background_policy(device_id:str, principal:Principal=Depends(admin_auth)):
+    require_approver(principal)
+    with db() as conn:
+        d=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
+        if not d: raise HTTPException(status_code=404,detail='Device not found')
+        require_org_access(principal,d['organization_id'])
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
+        payload=json.dumps({'requested_by':principal.username})
+        conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',(device_id,'retry_background_policy',payload,'pending',utcnow()))
+        audit(conn,principal.username,'background_policy_retry_queued',organization_id=d['organization_id'],device_id=device_id,object_type='device',object_id=device_id,detail=f"failed={int(d['background_policy_failed'] or 0)}")
     return RedirectResponse(f'/devices/{device_id}',status_code=303)
 
 

@@ -167,7 +167,7 @@ class Release0172InstallationLearningTests(unittest.TestCase):
         finalizer = helper[helper.index("FinalizeInstallationModeAsync"):helper.index("ForceEnforcementAsync")]
 
         self.assertIn(
-            "learned.Count > 0 && ready.Length == 0 && plan.SkippedCount > 0",
+            "learned.Count > 0 && ready.Length == 0 && (plan.SkippedCount + plan.IgnoredEphemeralCount) > 0",
             finalizer,
         )
         self.assertIn("none could be converted into safe authorization rules", finalizer)

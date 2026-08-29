@@ -10,7 +10,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>AppControlManager-Installer</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.17.2</Version>
+    <Version>0.18.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Payload\agent-payload.zip" LogicalName="AgentPayload" />

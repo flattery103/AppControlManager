@@ -67,6 +67,22 @@ public sealed class BackgroundPolicySnapshot
     [JsonPropertyName("learning")] public List<LearningRuleReference> Learning { get; set; } = [];
 }
 
+public sealed class BackgroundPolicyQueueStatus
+{
+    public int Pending { get; init; }
+    public int Failed { get; init; }
+    public string Status { get; init; } = "idle";
+    public string? OldestPendingAt { get; init; }
+    public string? LastError { get; init; }
+}
+
+public sealed class BackgroundPolicyRetryResult
+{
+    public int RulesReset { get; init; }
+    public int BundlesReset { get; init; }
+    public int TotalReset => RulesReset + BundlesReset;
+}
+
 public sealed class LearningPreparationStats
 {
     public int Observed { get; set; }
@@ -75,6 +91,7 @@ public sealed class LearningPreparationStats
     public int Reused { get; set; }
     public int Queued { get; set; }
     public int Unpreparable { get; set; }
+    public int IgnoredEphemeral { get; set; }
     public Dictionary<string, string> PreparedRuleKeysByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 

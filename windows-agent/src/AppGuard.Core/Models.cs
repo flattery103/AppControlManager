@@ -23,13 +23,15 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("learning_mode")] public bool LearningMode { get; set; }
     [JsonPropertyName("policy_mode")] public string PolicyMode { get; set; } = "unknown";
     [JsonPropertyName("script_enforcement_disabled")] public bool? ScriptEnforcementDisabled { get; set; }
-    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.17.2";
+    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.18.0";
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("update_status")] public string? UpdateStatus { get; set; }
     [JsonPropertyName("update_result")] public string? UpdateResult { get; set; }
     [JsonPropertyName("background_policy_status")] public string? BackgroundPolicyStatus { get; set; }
     [JsonPropertyName("background_policy_pending")] public int? BackgroundPolicyPending { get; set; }
     [JsonPropertyName("background_policy_failed")] public int? BackgroundPolicyFailed { get; set; }
+    [JsonPropertyName("background_policy_error")] public string? BackgroundPolicyError { get; set; }
+    [JsonPropertyName("background_policy_oldest_at")] public string? BackgroundPolicyOldestAt { get; set; }
 }
 
 public sealed class EventUpload

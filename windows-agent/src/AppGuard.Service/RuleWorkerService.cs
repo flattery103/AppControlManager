@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AppGuard.Core;
 using Microsoft.Extensions.Hosting;
 
@@ -8,13 +9,19 @@ namespace AppGuard.Service;
 
 internal sealed class RuleWorkerService : BackgroundService
 {
-    private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+    };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         Directory.CreateDirectory(AppGuardPaths.RuleWorkerDirectory);
         Directory.CreateDirectory(AppGuardPaths.RuleWorkerJobsDirectory);
         WriteLog("rule-worker start");
+        CleanupStaleJobs();
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -34,53 +41,103 @@ internal sealed class RuleWorkerService : BackgroundService
         finally { WriteLog("rule-worker stop"); }
     }
 
+    private static void CleanupStaleJobs()
+    {
+        var cutoff = DateTime.UtcNow.Subtract(TimeSpan.FromDays(7));
+        foreach (var jobDirectory in Directory.EnumerateDirectories(AppGuardPaths.RuleWorkerJobsDirectory))
+        {
+            try
+            {
+                if ((File.GetAttributes(jobDirectory) & FileAttributes.ReparsePoint) != 0) continue;
+                var newest = Directory.GetLastWriteTimeUtc(jobDirectory);
+                foreach (var file in Directory.EnumerateFiles(jobDirectory, "*", SearchOption.TopDirectoryOnly))
+                    newest = new[] { newest, File.GetLastWriteTimeUtc(file) }.Max();
+                if (newest >= cutoff) continue;
+
+                var requestPath = Path.Combine(jobDirectory, "request.json");
+                var resultPath = Path.Combine(jobDirectory, "result.json");
+                var abandonedUnpublished = !File.Exists(requestPath) && !File.Exists(resultPath);
+                var completedFailed = false;
+                if (File.Exists(resultPath))
+                {
+                    var result = JsonSerializer.Deserialize<RuleWorkerResult>(File.ReadAllText(resultPath), Json);
+                    completedFailed = result is not null && !result.Success;
+                }
+                if (!abandonedUnpublished && !completedFailed) continue;
+                Directory.Delete(jobDirectory, true);
+                WriteLog($"stale job removed id={Path.GetFileName(jobDirectory)} failed={completedFailed}");
+            }
+            catch (Exception ex)
+            {
+                WriteLog($"stale job cleanup failed id={Path.GetFileName(jobDirectory)} error={Limit(ex.Message, 1000)}");
+            }
+        }
+    }
+
     private static async Task ProcessJobAsync(string jobDirectory, string requestPath, string resultPath, CancellationToken ct)
     {
         RuleWorkerResult result;
+        var operation = "";
         try
         {
             var request = JsonSerializer.Deserialize<RuleWorkerRequest>(await File.ReadAllTextAsync(requestPath, ct), Json)
                           ?? throw new InvalidDataException("Rule worker request was empty.");
             ValidateRequest(jobDirectory, request);
-            var inputPath = Path.Combine(jobDirectory, request.InputFileName);
-            var fragmentPath = Path.Combine(jobDirectory, "fragment.xml");
+            operation = request.Operation.ToLowerInvariant();
+            if (!RuleWorkerOperations.TryGetOutputFile(operation, out var outputFileName))
+                throw new InvalidDataException("Rule worker operation is not allowed.");
+            var inputPath = Path.GetFullPath(Path.Combine(jobDirectory, request.InputFileName));
+            var outputPath = Path.GetFullPath(Path.Combine(jobDirectory, outputFileName));
             if (!File.Exists(inputPath)) throw new FileNotFoundException("Staged rule-worker input is missing.", inputPath);
+            RejectReparsePoint(inputPath, "input");
 
-            var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "New-RuleFragment.ps1");
-            if (!File.Exists(script)) throw new FileNotFoundException("Rule-fragment helper is missing.", script);
-            WriteLog($"job start id={request.JobId} kind={request.Kind} file={request.InputFileName}");
-            var output = await RunPowerShellAsync(script, request.Kind, inputPath, fragmentPath, ct);
+            var scriptName = RuleWorkerOperations.IsFragmentOperation(operation) ? "New-RuleFragment.ps1" : "New-WorkerPolicy.ps1";
+            var script = Path.Combine(AppGuardPaths.ScriptsDirectory, scriptName);
+            if (!File.Exists(script)) throw new FileNotFoundException("Rule-generation helper is missing.", script);
+            WriteLog($"job start id={request.JobId} operation={operation} file={request.InputFileName}");
+            var output = await RunPowerShellAsync(script, operation, inputPath, outputPath, ct);
             var jsonLine = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .LastOrDefault(x => x.TrimStart().StartsWith("{", StringComparison.Ordinal));
-            if (jsonLine is null) throw new InvalidOperationException("Rule-fragment helper did not return JSON. Output: " + output);
-            var fragment = JsonSerializer.Deserialize<WorkerFragmentOutput>(jsonLine, Json)
-                           ?? throw new InvalidOperationException("Could not parse rule-fragment helper result.");
-            if (fragment.RuleCount <= 0 || !File.Exists(fragmentPath))
-                throw new InvalidOperationException("Rule-fragment helper did not produce a usable fragment.");
+            if (jsonLine is null) throw new InvalidOperationException("Rule-generation helper did not return JSON. Output: " + output);
+            var generated = JsonSerializer.Deserialize<WorkerGenerationOutput>(jsonLine, Json)
+                            ?? throw new InvalidOperationException("Could not parse rule-generation helper result.");
+            if (!generated.Operation.Equals(operation, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Rule-generation helper returned a different operation.");
+            if (generated.RuleCount <= 0 || string.IsNullOrWhiteSpace(generated.RuleMode) || !File.Exists(outputPath))
+                throw new InvalidOperationException("Rule-generation helper did not produce usable policy XML.");
+            RejectReparsePoint(outputPath, "output");
             result = new RuleWorkerResult
             {
                 Success = true,
-                RuleCount = fragment.RuleCount,
-                Kind = request.Kind,
-                ElapsedSeconds = fragment.ElapsedSeconds
+                Operation = operation,
+                RuleCount = generated.RuleCount,
+                RuleMode = generated.RuleMode,
+                ElapsedSeconds = generated.ElapsedSeconds,
+                FilePath = generated.FilePath,
+                Sha256 = generated.Sha256,
+                Publisher = generated.Publisher,
+                ProductName = generated.ProductName,
+                FileVersion = generated.FileVersion
             };
-            WriteLog($"job success id={request.JobId} kind={request.Kind} rules={fragment.RuleCount} elapsed={fragment.ElapsedSeconds:F1}s");
+            WriteLog($"job success id={request.JobId} operation={operation} mode={generated.RuleMode} rules={generated.RuleCount} elapsed={generated.ElapsedSeconds:F1}s");
         }
         catch (Exception ex)
         {
-            result = new RuleWorkerResult { Success = false, Error = Limit(ex.Message, 8000) };
-            WriteLog($"job failed dir={Path.GetFileName(jobDirectory)} error={Limit(ex.Message, 2000)}");
+            var error = SanitizeError(ex.Message, jobDirectory, 8000);
+            result = new RuleWorkerResult { Success = false, Operation = operation, Error = error };
+            WriteLog($"job failed dir={Path.GetFileName(jobDirectory)} error={SanitizeError(ex.Message, jobDirectory, 2000)}");
         }
         await WriteJsonAtomicAsync(resultPath, result, ct);
     }
 
     private static void ValidateRequest(string jobDirectory, RuleWorkerRequest request)
     {
+        RejectReparsePoint(jobDirectory, "job directory");
         var directoryName = Path.GetFileName(Path.TrimEndingDirectorySeparator(jobDirectory));
         if (!Guid.TryParseExact(request.JobId, "N", out _) || !directoryName.Equals(request.JobId, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Rule worker job ID is invalid.");
-        if (!request.Kind.Equals("product", StringComparison.OrdinalIgnoreCase) && !request.Kind.Equals("hash", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Rule worker kind must be product or hash.");
+        if (!RuleWorkerOperations.TryGetOutputFile(request.Operation, out _))
+            throw new InvalidDataException("Rule worker operation is not allowed.");
         if (string.IsNullOrWhiteSpace(request.InputFileName) || request.InputFileName != Path.GetFileName(request.InputFileName))
             throw new InvalidDataException("Rule worker input filename is invalid.");
         var root = Path.GetFullPath(jobDirectory) + Path.DirectorySeparatorChar;
@@ -89,7 +146,13 @@ internal sealed class RuleWorkerService : BackgroundService
             throw new InvalidDataException("Rule worker input escaped the job directory.");
     }
 
-    private static async Task<string> RunPowerShellAsync(string script, string kind, string inputPath, string fragmentPath, CancellationToken ct)
+    private static void RejectReparsePoint(string path, string description)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"Rule worker {description} cannot be a reparse point.");
+    }
+
+    private static async Task<string> RunPowerShellAsync(string script, string operation, string inputPath, string outputPath, CancellationToken ct)
     {
         var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
         var powershell = Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -100,9 +163,9 @@ internal sealed class RuleWorkerService : BackgroundService
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(fragmentPath)!
+            WorkingDirectory = Path.GetDirectoryName(outputPath)!
         };
-        foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Kind", kind.ToLowerInvariant(), "-FilePath", inputPath, "-OutputPath", fragmentPath, "-Json" })
+        foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Operation", operation, "-FilePath", inputPath, "-OutputPath", outputPath, "-Json" })
             startInfo.ArgumentList.Add(argument);
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start Local Service rule-generation PowerShell process.");
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -144,9 +207,23 @@ internal sealed class RuleWorkerService : BackgroundService
 
     private static string Limit(string value, int max) => value.Length <= max ? value : value[..max];
 
-    private sealed class WorkerFragmentOutput
+    private static string SanitizeError(string value, string jobDirectory, int max)
     {
+        var sanitized = CleanOutput(value).Replace(jobDirectory, "[job]", StringComparison.OrdinalIgnoreCase);
+        sanitized = new string(sanitized.Where(c => !char.IsControl(c) || c is '\r' or '\n' or '\t').ToArray()).Trim();
+        return Limit(sanitized, max);
+    }
+
+    private sealed class WorkerGenerationOutput
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("operation")] public string Operation { get; set; } = "";
         [System.Text.Json.Serialization.JsonPropertyName("rule_count")] public int RuleCount { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("rule_mode")] public string RuleMode { get; set; } = "";
         [System.Text.Json.Serialization.JsonPropertyName("elapsed_seconds")] public double ElapsedSeconds { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("file_path")] public string? FilePath { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sha256")] public string? Sha256 { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("publisher")] public string? Publisher { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("product_name")] public string? ProductName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("file_version")] public string? FileVersion { get; set; }
     }
 }

@@ -49,7 +49,9 @@ public sealed class PolicyHelper
         _log.Write($"bundle-scan summary requested={requested.Length} policyFiles={files.Length} expanded={expanded} roots={expansion.RootScans} duplicateRootsSkipped={expansion.DuplicateScansSkipped} filesExamined={expansion.FilesExamined} signerReads={expansion.SignerReads} cacheHits={expansion.CacheHits} scanElapsed={expansion.ScanElapsed.TotalSeconds:F2}s primary={primaryFile}");
 
         _progress.Update(requestId, "authorizing_primary", "Authorizing primary application...", 1);
-        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "New-PrimaryApprovalPolicy.ps1");
+        Directory.CreateDirectory(AppGuardPaths.PolicyDirectory);
+        var generatedXml = Path.Combine(AppGuardPaths.PolicyDirectory, $"Primary-{Guid.NewGuid():N}.xml");
+        RuleWorkerResult generated;
         string output;
         var started = DateTimeOffset.UtcNow;
         Interlocked.Increment(ref _foregroundWaiters);
@@ -58,8 +60,10 @@ public sealed class PolicyHelper
             await _policyGenerationGate.WaitAsync(ct);
             try
             {
-                var args = $"-FilePath {Quote(primaryFile)} -Name {Quote("AppControl Manager Approval " + requestId)} -Json";
                 _log.Write($"policy-helper primary start request={requestId} files=1 primary={primaryFile}");
+                generated = await _ruleWorker.GenerateAsync("primary_allow", primaryFile, generatedXml, ct);
+                var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Install-GeneratedPolicy.ps1");
+                var args = $"-Operation primary_allow -XmlPath {Quote(generatedXml)} -Name {Quote("AppControl Manager Approval " + requestId)} -RuleMode {Quote(generated.RuleMode)} -Json";
                 output = await RunPowerShellAsync(script, args, ct);
             }
             finally { _policyGenerationGate.Release(); }
@@ -71,6 +75,7 @@ public sealed class PolicyHelper
         if (line is null) throw new InvalidOperationException("Primary policy helper did not return JSON. Output: " + output);
         var result = JsonSerializer.Deserialize<SupplementalResult>(line, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                      ?? throw new InvalidOperationException("Could not parse primary policy helper result.");
+        ApplyWorkerMetadata(result, generated, includePrimaryMode: true);
         result.RequestedFiles = requested.Length;
         result.PolicyFiles = 1;
         result.ExpandedFiles = expanded;
@@ -416,9 +421,14 @@ public sealed class PolicyHelper
         var safe = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rule.CacheKey))).Substring(0, 24);
         var outputPath = Path.Combine(AppGuardPaths.RuleFragmentDirectory, safe + ".xml");
         var started = DateTimeOffset.UtcNow;
-        var result = await _ruleWorker.GenerateAsync(rule.Kind, rule.RepresentativePath, outputPath, ct);
-        if (result.ElapsedSeconds <= 0) result.ElapsedSeconds = (DateTimeOffset.UtcNow - started).TotalSeconds;
-        return result;
+        var generated = await _ruleWorker.GenerateAsync(rule.Kind, rule.RepresentativePath, outputPath, ct);
+        return new BackgroundRuleFragmentResult
+        {
+            FragmentXmlPath = outputPath,
+            RuleCount = generated.RuleCount,
+            Kind = generated.Operation,
+            ElapsedSeconds = generated.ElapsedSeconds > 0 ? generated.ElapsedSeconds : (DateTimeOffset.UtcNow - started).TotalSeconds
+        };
     }
 
     public async Task<SupplementalResult> InstallMergedSupplementalAsync(long requestId, IReadOnlyList<string> fragments, CancellationToken ct)
@@ -443,13 +453,40 @@ public sealed class PolicyHelper
     public async Task<SupplementalResult> BlockFileAsync(string filePath, long blockId, CancellationToken ct)
     {
         if (!File.Exists(filePath)) throw new FileNotFoundException("The file to block is no longer available for policy generation.", filePath);
-        var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "New-DenyPolicyForFile.ps1");
-        var command = $"& {{ & {SingleQuote(script)} -FilePath @({SingleQuote(filePath)}) -Name {SingleQuote("AppControl Manager Deny " + blockId)} -Json }}";
-        var output = await RunPowerShellCommandAsync(command, ct);
+        Directory.CreateDirectory(AppGuardPaths.PolicyDirectory);
+        var generatedXml = Path.Combine(AppGuardPaths.PolicyDirectory, $"Deny-{Guid.NewGuid():N}.xml");
+        RuleWorkerResult generated;
+        string output;
+        Interlocked.Increment(ref _foregroundWaiters);
+        try
+        {
+            await _policyGenerationGate.WaitAsync(ct);
+            try
+            {
+                generated = await _ruleWorker.GenerateAsync("deny_policy", filePath, generatedXml, ct);
+                var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Install-GeneratedPolicy.ps1");
+                var args = $"-Operation deny_policy -XmlPath {Quote(generatedXml)} -Name {Quote("AppControl Manager Deny " + blockId)} -RuleMode {Quote(generated.RuleMode)} -Json";
+                output = await RunPowerShellAsync(script, args, ct);
+            }
+            finally { _policyGenerationGate.Release(); }
+        }
+        finally { Interlocked.Decrement(ref _foregroundWaiters); }
         var line = output.Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault(x => x.TrimStart().StartsWith("{"));
         if (line is null) throw new InvalidOperationException("Deny policy helper did not return JSON. Output: " + output);
-        return JsonSerializer.Deserialize<SupplementalResult>(line, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-               ?? throw new InvalidOperationException("Could not parse deny policy helper result.");
+        var result = JsonSerializer.Deserialize<SupplementalResult>(line, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                     ?? throw new InvalidOperationException("Could not parse deny policy helper result.");
+        ApplyWorkerMetadata(result, generated, includePrimaryMode: false);
+        return result;
+    }
+
+    private static void ApplyWorkerMetadata(SupplementalResult result, RuleWorkerResult generated, bool includePrimaryMode)
+    {
+        result.FilePath = generated.FilePath;
+        result.Sha256 = generated.Sha256;
+        result.Publisher = generated.Publisher;
+        result.ProductName = generated.ProductName;
+        result.FileVersion = generated.FileVersion;
+        if (includePrimaryMode) result.PrimaryRuleMode = generated.RuleMode;
     }
 
     public async Task RemovePolicyAsync(string policyId, CancellationToken ct)
@@ -491,7 +528,10 @@ public sealed class PolicyHelper
                 if (prep.Unpreparable > 0)
                     throw new InvalidOperationException($"Cannot enable enforcement: {prep.Unpreparable} learned application(s) could not be converted into safe authorization candidates.");
 
-                var paths = learned.Select(x => x.FilePath ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var paths = learned.Select(x => x.FilePath ?? string.Empty)
+                    .Where(x => !string.IsNullOrWhiteSpace(x) && !LearnedPathClassifier.IsExpectedDotNetExtraction(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
                 var requiredKeys = _backgroundStore.LearningRuleKeysForPaths(paths);
                 var rules = _backgroundStore.RulesForKeys(requiredKeys).ToDictionary(x => x.CacheKey, StringComparer.OrdinalIgnoreCase);
                 var unprepared = 0;
@@ -519,9 +559,11 @@ public sealed class PolicyHelper
                 var prepared = ready.Length;
                 if (prepared != requiredKeys.Count) unprepared += Math.Max(0, requiredKeys.Count - prepared - unprepared);
                 finalDeltaTimer.Stop();
-                _log.Write($"policy-helper ACM_STAGE learned-final-delta elapsed={finalDeltaTimer.Elapsed.TotalSeconds:F1}s learned={learned.Count} prepared={prepared} unprepared={unprepared}");
+                _log.Write($"policy-helper ACM_STAGE learned-final-delta elapsed={finalDeltaTimer.Elapsed.TotalSeconds:F1}s learned={learned.Count} prepared={prepared} ignoredEphemeral={prep.IgnoredEphemeral} unprepared={unprepared}");
                 if (unprepared > 0)
                     throw new InvalidOperationException($"Cannot enable enforcement: {unprepared} learned authorization fragment(s) remain unresolved.");
+                if (learned.Count > 0 && prepared == 0 && prep.IgnoredEphemeral > 0)
+                    throw new InvalidOperationException($"Learning observed {prep.IgnoredEphemeral} expected .NET extraction file(s), but none could be converted into safe authorization rules.");
 
                 var FragmentListPath = Path.Combine(Path.GetTempPath(), $"AppControlManager-LearnedFragments-{Guid.NewGuid():N}.json");
                 try
@@ -565,7 +607,8 @@ public sealed class PolicyHelper
                     prep.PreparedRuleKeysByPath,
                     snapshot.Learning,
                     readyExistingRuleKeys,
-                    File.Exists);
+                    File.Exists,
+                    LearnedPathClassifier.IsExpectedDotNetExtraction);
                 var requiredKeys = plan.RequiredRuleKeys;
                 var rules = _backgroundStore.RulesForKeys(requiredKeys).ToDictionary(x => x.CacheKey, StringComparer.OrdinalIgnoreCase);
                 var unresolved = 0;
@@ -590,10 +633,10 @@ public sealed class PolicyHelper
                     .Where(x => x.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(x.FragmentXmlPath) && File.Exists(x.FragmentXmlPath))
                     .ToArray();
                 if (ready.Length != requiredKeys.Count) unresolved += Math.Max(0, requiredKeys.Count - ready.Length - unresolved);
-                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} skipped={plan.SkippedCount} unresolved={unresolved}");
+                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} ignoredEphemeral={plan.IgnoredEphemeralCount} skipped={plan.SkippedCount} unresolved={unresolved}");
                 if (unresolved > 0) throw new InvalidOperationException($"Installation Mode has {unresolved} unresolved learned authorization fragment(s).");
-                if (learned.Count > 0 && ready.Length == 0 && plan.SkippedCount > 0)
-                    throw new InvalidOperationException($"Installation Mode learned {plan.SkippedCount} file(s), but none could be converted into safe authorization rules.");
+                if (learned.Count > 0 && ready.Length == 0 && (plan.SkippedCount + plan.IgnoredEphemeralCount) > 0)
+                    throw new InvalidOperationException($"Installation Mode learned {plan.SkippedCount + plan.IgnoredEphemeralCount} file(s), but none could be converted into safe authorization rules.");
 
                 if (ready.Length > 0)
                 {
@@ -614,14 +657,15 @@ public sealed class PolicyHelper
                 {
                     LearnedCount = learned.Count,
                     InstalledRuleCount = ready.Length,
-                    SkippedCount = plan.SkippedCount
+                    SkippedCount = plan.SkippedCount,
+                    IgnoredEphemeralCount = plan.IgnoredEphemeralCount
                 };
             }
             finally { _policyGenerationGate.Release(); }
         }
         finally { Interlocked.Decrement(ref _foregroundWaiters); }
         var completed = result ?? throw new InvalidOperationException("Installation Mode finalization did not produce a result.");
-        _log.Write($"installation-finalize completed id={installationId} learned={completed.LearnedCount} installed={completed.InstalledRuleCount} skipped={completed.SkippedCount}");
+        _log.Write($"installation-finalize completed id={installationId} learned={completed.LearnedCount} installed={completed.InstalledRuleCount} ignoredEphemeral={completed.IgnoredEphemeralCount} skipped={completed.SkippedCount}");
         return completed;
     }
 

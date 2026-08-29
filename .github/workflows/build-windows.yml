@@ -5,7 +5,7 @@ on:
       version:
         description: 'Agent/installer version to build'
         required: true
-        default: '0.17.2'
+        default: '0.18.0'
   push:
     paths:
       - 'windows-agent/**'
@@ -22,13 +22,16 @@ jobs:
       - name: Run Windows core behavior tests
         shell: powershell
         run: dotnet run --project .\windows-agent\tests\AppGuard.Core.BehaviorTests\AppGuard.Core.BehaviorTests.csproj -c Release
+      - name: Run installed-policy validation behavior tests
+        shell: powershell
+        run: .\.github\tests\Test-InstalledPolicyValidation.ps1
       - name: Build self-contained x64 agent, update package and installer
         shell: powershell
-        run: .\windows-agent\Build.ps1 -Version "${{ github.event.inputs.version || '0.17.2' }}"
+        run: .\windows-agent\Build.ps1 -Version "${{ github.event.inputs.version || '0.18.0' }}"
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AppControlManager-${{ github.event.inputs.version || '0.17.2' }}-Windows-x64
+          name: AppControlManager-${{ github.event.inputs.version || '0.18.0' }}-Windows-x64
           path: |
             windows-agent/publish/**
             windows-agent/scripts/**

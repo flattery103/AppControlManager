@@ -1,0 +1,31 @@
+AppControl Manager 0.18.0
+
+Consolidated reliability release
+
+- GitHub Release publication now handles the expected "release not found" result
+  explicitly, creates the release automatically, and still fails closed for other
+  GitHub CLI errors.
+- Foreground allow and deny policy generation now uses the constrained Local Service
+  Rule Worker. LocalSystem remains the only process that post-processes, converts,
+  installs, removes, refreshes, or verifies WDAC policies.
+- Administrators can Retry failed background policy work from the device page when
+  the endpoint command queue is free. Only failed work is reset; ready and installed
+  state is preserved.
+- Endpoint heartbeats and the device page expose bounded background-policy errors and
+  the oldest pending timestamp, making stalled or failed work diagnosable.
+- Rule Worker startup cleanup removes only old failed or abandoned unpublished job
+  directories. It never scans or removes protected policy/cache roots.
+- Expected .NET single-file extraction children are counted separately during
+  learning when they match the narrow recognized temp path shape. This is not a
+  blanket TEMP exclusion, and sessions with no usable safe rule still fail closed.
+
+Upgrade acceptance:
+
+- Publish the signed v0.18.0 release and verify all six release assets.
+- Update the server, import the matching managed-agent release, and prove the managed
+  endpoint upgrade from 0.17.2 to 0.18.0.
+- Confirm both Windows services, signed binaries, heartbeat diagnostics, foreground
+  allow/deny, Installation Mode, retry, and enforcement restoration.
+
+Rollback/reference baseline: retain the published 0.17.2 source and signed assets for
+immediate rollback. App Control Manager 0.16.2 remains the older architecture reference.

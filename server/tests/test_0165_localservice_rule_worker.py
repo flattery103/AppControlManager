@@ -33,10 +33,11 @@ class Release0165RuleWorkerTests(unittest.TestCase):
         worker = self.read("windows-agent/src/AppGuard.Service/RuleWorkerService.cs")
         self.assertIn('RuleWorkerRequest', job)
         self.assertIn('RuleWorkerResult', job)
-        self.assertIn('product', worker)
-        self.assertIn('hash', worker)
+        self.assertIn('product', job)
+        self.assertIn('hash', job)
+        self.assertIn('RuleWorkerOperations.TryGetOutputFile', worker)
         self.assertIn('Path.GetFileName(request.InputFileName)', worker)
-        self.assertIn('fragment.xml', worker)
+        self.assertIn('fragment.xml', job)
         self.assertNotIn('ScriptPath', job)
         self.assertNotIn('OutputPath', job)
 
@@ -50,7 +51,7 @@ class Release0165RuleWorkerTests(unittest.TestCase):
         self.assertNotIn('New-RuleFragment.ps1', fragment_method)
         self.assertIn('request.json', client)
         self.assertIn('result.json', client)
-        self.assertIn('fragment.xml', client)
+        self.assertIn('workerOutputFileName', client)
         self.assertIn('File.Copy(sourcePath', client)
 
     def test_main_service_self_provisions_worker_for_0164_to_0165_managed_update(self):
@@ -59,7 +60,11 @@ class Release0165RuleWorkerTests(unittest.TestCase):
         self.assertIn("RuleWorkerProvisioner.EnsureInstalled()", program)
         self.assertIn("AppControlManagerRuleWorker", provisioner)
         self.assertIn("NT AUTHORITY\\LocalService", provisioner)
-        self.assertIn("*S-1-5-19:(OI)(CI)(M)", provisioner)
+        self.assertIn("*S-1-5-19:(OI)(CI)(RX)", provisioner)
+        grant_job = provisioner[provisioner.index("internal static void GrantJobAccess"):]
+        self.assertIn("*S-1-5-19:(OI)(CI)(IO)(M)", grant_job)
+        self.assertIn("ProtectStagedFile(canonicalJob, stagedInput)", grant_job)
+        self.assertIn("ProtectStagedFile(canonicalJob, requestPath)", grant_job)
         self.assertIn('"sc.exe", "create"', provisioner)
 
     def test_install_update_and_uninstall_preserve_local_service_worker_lifecycle(self):

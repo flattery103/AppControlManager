@@ -7,7 +7,7 @@ namespace AppGuard.Service;
 
 public sealed class AgentWorker : BackgroundService
 {
-    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.17.2";
+    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.18.0";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;
@@ -101,7 +101,9 @@ public sealed class AgentWorker : BackgroundService
             UpdateResult = update.Result,
             BackgroundPolicyStatus = background.Status,
             BackgroundPolicyPending = background.Pending,
-            BackgroundPolicyFailed = background.Failed
+            BackgroundPolicyFailed = background.Failed,
+            BackgroundPolicyError = background.LastError,
+            BackgroundPolicyOldestAt = background.OldestPendingAt
         }, ct);
         try { await _updater.CleanupPreviousTrustAsync(Version, ct); } catch (Exception ex) { _log.Write("agent-update cleanup: " + ex.Message); }
         if (_loop == 1 || _loop % 20 == 0) _log.Write("heartbeat OK mode=" + mode + (string.IsNullOrWhiteSpace(update.Status) ? "" : " update=" + update.Status));
@@ -169,7 +171,7 @@ public sealed class AgentWorker : BackgroundService
                 if (learned.Length > 0)
                 {
                     var stats = _backgroundPolicyStore.PrepareLearningEvents(learned);
-                    _log.Write($"learning-prep observed={stats.Observed} productCandidates={stats.ProductCandidates} hashCandidates={stats.HashCandidates} reused={stats.Reused} queued={stats.Queued} unpreparable={stats.Unpreparable}");
+                    _log.Write($"learning-prep observed={stats.Observed} productCandidates={stats.ProductCandidates} hashCandidates={stats.HashCandidates} reused={stats.Reused} queued={stats.Queued} ignoredEphemeral={stats.IgnoredEphemeral} unpreparable={stats.Unpreparable}");
                 }
             }
         }
@@ -339,6 +341,12 @@ public sealed class AgentWorker : BackgroundService
                         complete.Success = true;
                         complete.Result = $"Installation Mode {endingInstallationId} ended and Enforcement was restored.";
                         _log.Write($"command {command.Id} ended Installation Mode id={endingInstallationId}");
+                        break;
+                    case "retry_background_policy":
+                        var retried = _backgroundPolicyStore.RetryFailedWork();
+                        complete.Success = true;
+                        complete.Result = $"Reset {retried.RulesReset} failed rule job(s) and {retried.BundlesReset} failed bundle job(s) to queued.";
+                        _log.Write($"command {command.Id} retried background policy work rules={retried.RulesReset} bundles={retried.BundlesReset}");
                         break;
                     default:
                         throw new InvalidOperationException("Unknown command type " + command.CommandType);
