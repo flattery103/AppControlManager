@@ -14,6 +14,8 @@ Installation Mode partial-learning repair
   could not be restored.
 - Installation Request history shows Completed With Warnings with a warning badge
   and retains the processed, installed, and skipped counts for review.
+- The main dashboard now includes pending Installation Requests in its combined
+  Pending Requests queue and count, with duration, approval, and denial controls.
 
 This release preserves the fail-closed safety boundary: skipped files are never
 silently authorized, and Enforcement restoration remains mandatory.

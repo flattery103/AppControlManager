@@ -4,6 +4,8 @@
 
 Version 0.17.2 fixes an all-or-nothing Installation Mode finalization path. Valid learned authorization rules are now installed even when temporary or deleted installer files cannot be converted into safe candidates. Mixed results return the endpoint to Enforcement and appear as **Completed With Warnings** with processed, installed, and skipped counts. Sessions with learned activity but no usable authorization rules still fail safely.
 
+Pending installation requests now also appear on the main dashboard in the combined **Pending Requests** queue, including their duration, approval, and denial controls.
+
 
 ## 0.17.1 Managed Update Repair
 

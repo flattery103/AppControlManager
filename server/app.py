@@ -3092,6 +3092,17 @@ def request_actions(conn: sqlite3.Connection, principal: Principal, r: sqlite3.R
             f"<a class='button btn-warning' href='/requests/{r['id']}/deny'>Deny request</a></div>")
 
 
+def installation_request_actions(principal: Principal, request: sqlite3.Row) -> str:
+    if request['status']=='pending' and principal.can_approve:
+        return (f"<div class='action-stack'><form class='actions' method='post' action='/admin/installations/{request['id']}/approve'>"
+                f"<label>Minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='installation-durations' style='width:82px'>"
+                f"<button class='btn-primary'>Approve Installation</button></form>"
+                f"<form method='post' action='/admin/installations/{request['id']}/deny'><button class='btn-danger'>Deny</button></form></div>")
+    if request['status']=='approved':
+        return f"<span class='muted'>Approved for {request['duration_minutes'] or 15} minutes. Waiting for the user to click Start Installation.</span>"
+    return f"<span class='muted'>{escape(request['decision_note'] or '')}</span>"
+
+
 
 @app.get('/search', response_class=HTMLResponse)
 def global_search(q:str='', principal:Principal=Depends(admin_auth)):
@@ -3159,7 +3170,9 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
         device_count=conn.execute(f"SELECT COUNT(*) n FROM devices d WHERE {clause}",params).fetchone()['n']
         online_count=conn.execute(f"SELECT COUNT(*) n FROM devices d WHERE {clause} AND d.last_seen>=?",params+[online_cutoff]).fetchone()['n']
         enforcement_count=conn.execute(f"SELECT COUNT(*) n FROM devices d WHERE {clause} AND lower(COALESCE(NULLIF(d.policy_mode,'unknown'),CASE WHEN d.learning_mode=1 THEN 'learning' ELSE 'enforcement' END))='enforcement'",params).fetchone()['n']
-        pending_count=conn.execute(f"SELECT COUNT(*) n FROM approval_requests r JOIN devices d ON d.id=r.device_id WHERE {clause} AND r.status='pending'",params).fetchone()['n']
+        pending_access_count=conn.execute(f"SELECT COUNT(*) n FROM approval_requests r JOIN devices d ON d.id=r.device_id WHERE {clause} AND r.status='pending'",params).fetchone()['n']
+        pending_installation_count=conn.execute(f"SELECT COUNT(*) n FROM installation_requests i JOIN devices d ON d.id=i.device_id WHERE {clause} AND i.status='pending'",params).fetchone()['n']
+        pending_count=pending_access_count+pending_installation_count
         blocks_24h=conn.execute(f"SELECT COUNT(*) n FROM events e JOIN devices d ON d.id=e.device_id WHERE {clause} AND e.event_id=3077 AND COALESCE(e.occurred_at,e.received_at)>=?",params+[day_cutoff]).fetchone()['n']
         blocks_7d=conn.execute(f"SELECT COUNT(*) n FROM events e JOIN devices d ON d.id=e.device_id WHERE {clause} AND e.event_id=3077 AND COALESCE(e.occurred_at,e.received_at)>=?",params+[week_cutoff]).fetchone()['n']
         update_attention=conn.execute(f"SELECT COUNT(*) n FROM devices d WHERE {clause} AND d.desired_agent_version IS NOT NULL AND COALESCE(d.agent_version,'')<>d.desired_agent_version",params).fetchone()['n']
@@ -3175,6 +3188,7 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
         else:
             allow_count=conn.execute("SELECT COUNT(*) n FROM scoped_policies WHERE active=1 AND deleted_at IS NULL AND action='allow' AND (scope_type='global' OR organization_id=?)",(principal.organization_id,)).fetchone()['n']; block_count=conn.execute("SELECT COUNT(*) n FROM scoped_policies WHERE active=1 AND deleted_at IS NULL AND action='block' AND (scope_type='global' OR organization_id=?)",(principal.organization_id,)).fetchone()['n']
         pending=conn.execute(f"""SELECT r.*,d.hostname,d.organization_id,d.group_id,o.name organization_name FROM approval_requests r JOIN devices d ON d.id=r.device_id LEFT JOIN organizations o ON o.id=d.organization_id WHERE {clause} AND r.status='pending' ORDER BY r.id DESC LIMIT 8""",params).fetchall()
+        pending_installations=conn.execute(f"""SELECT i.*,d.hostname,d.organization_id,d.group_id,o.name organization_name FROM installation_requests i JOIN devices d ON d.id=i.device_id LEFT JOIN organizations o ON o.id=d.organization_id WHERE {clause} AND i.status='pending' ORDER BY i.id DESC LIMIT 8""",params).fetchall()
         attention_cutoff=(now-timedelta(days=OFFLINE_ATTENTION_DAYS)).isoformat()
         attention=conn.execute(f"""SELECT d.*,o.name organization_name,g.name group_name FROM devices d LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN device_groups g ON g.id=d.group_id WHERE {clause} AND COALESCE(d.offboard_status,'') NOT IN ('queued','uninstalling','completed') AND ((d.desired_agent_version IS NOT NULL AND COALESCE(d.agent_version,'')<>d.desired_agent_version AND COALESCE(d.update_status,'') IN ('queued','installing','installed','failed','rolled_back','bootstrap_required','downloading','staging')) OR COALESCE(d.last_seen,d.created_at)<?) ORDER BY CASE WHEN d.desired_agent_version IS NOT NULL AND COALESCE(d.agent_version,'')<>d.desired_agent_version THEN 0 ELSE 1 END,COALESCE(d.last_seen,d.created_at) ASC LIMIT 8""",params+[attention_cutoff]).fetchall()
         recent_blocks=conn.execute(f"""SELECT e.id,e.device_id,e.product_name,e.file_path,e.occurred_at,e.received_at,d.hostname FROM events e JOIN devices d ON d.id=e.device_id WHERE {clause} AND e.event_id=3077 ORDER BY e.id DESC LIMIT 6""",params).fetchall()
@@ -3185,10 +3199,16 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
             start=(now-timedelta(days=ago)).replace(hour=0,minute=0,second=0,microsecond=0); finish=start+timedelta(days=1)
             n=conn.execute(f"SELECT COUNT(*) n FROM events e JOIN devices d ON d.id=e.device_id WHERE {clause} AND e.event_id=3077 AND COALESCE(e.occurred_at,e.received_at)>=? AND COALESCE(e.occurred_at,e.received_at)<?",params+[start.isoformat(),finish.isoformat()]).fetchone()['n']
             daily.append((start.strftime('%a'),n))
-        req_rows=[]
+        pending_items=[]
         for r in pending:
             actions=request_actions(conn,principal,r); count=r['component_count'] or 1; related=f" <span class='muted'>(+{count-1} related)</span>" if count>1 else ''
-            req_rows.append(f"<tr><td>{app_cell(r['product_name'],r['file_path'],'/requests/%s' % r['id'])}{related}</td><td><a href='/devices/{r['device_id']}'>{escape(r['hostname'])}</a></td><td>{escape(r['requested_by'] or '')}</td><td class='nowrap'>{display_time(r['created_at'])}</td><td><span class='clip'>{escape(r['reason'] or '')}</span></td><td>{actions}</td></tr>")
+            row=f"<tr><td>{app_cell(r['product_name'],r['file_path'],'/requests/%s' % r['id'])}{related}</td><td><span class='badge'>Access</span></td><td><a href='/devices/{r['device_id']}'>{escape(r['hostname'])}</a></td><td>{escape(r['requested_by'] or '')}</td><td class='nowrap'>{display_time(r['created_at'])}</td><td><span class='clip'>{escape(r['reason'] or '')}</span></td><td>{actions}</td></tr>"
+            pending_items.append((r['created_at'] or '',row))
+        for i in pending_installations:
+            actions=installation_request_actions(principal,i)
+            row=f"<tr><td>{app_cell(i['product_name'],i['file_path'])}</td><td><span class='badge badge-info'>Installation</span></td><td><a href='/devices/{i['device_id']}'>{escape(i['hostname'])}</a></td><td>{escape(i['requested_by'] or 'Administrator')}</td><td class='nowrap'>{display_time(i['created_at'])}</td><td><span class='clip'>{escape(i['reason'] or '')}</span></td><td>{actions}</td></tr>"
+            pending_items.append((i['created_at'] or '',row))
+        req_rows=[row for _,row in sorted(pending_items,key=lambda item:item[0],reverse=True)[:8]]
     notice="<div class='notice'><b>Device policy operation already in progress.</b> Wait for the current endpoint command to complete.</div>" if busy else ''
     attention_parts=[]
     for d in attention:
@@ -3213,14 +3233,15 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
       <div class='stat'><span class='stat-label'>Active Policies</span><b>{policy_total}</b><span class='trend'>{allow_count} allow · {block_count} block</span></div>
       <div class='stat'><span class='stat-label'>Items Needing Review</span><b>{operations_issues}</b><span class='trend'>{approval_failures} approval · {failed_commands} command · {block_failures} block · {update_failures} update · {offline_attention} offline</span></div>
     </div>
-    <div class='section-head'><h2>Pending Approval Requests</h2><a href='/requests'>View all requests →</a></div>
-    <div class='card'><table><tr><th>Application</th><th>Device</th><th>Requested By</th><th>Requested</th><th>Reason</th><th>Action / Scope</th></tr>{''.join(req_rows) or '<tr><td colspan=6><div class="empty">No pending approval requests.</div></td></tr>'}</table></div>
+    <datalist id='installation-durations'><option value='15'><option value='30'><option value='60'></datalist>
+    <div class='section-head'><h2>Pending Requests</h2><a href='/requests'>View all requests →</a></div>
+    <div class='card'><table><tr><th>Application</th><th>Type</th><th>Device</th><th>Requested By</th><th>Requested</th><th>Reason</th><th>Action / Scope</th></tr>{''.join(req_rows) or '<tr><td colspan=7><div class="empty">No pending requests.</div></td></tr>'}</table></div>
     <div class='grid-2'>
       <div><div class='section-head'><h2>Operational Health</h2><a href='/reports/device-compliance'>Compliance report →</a></div><div class='panel'>
         <div class='metric-row'><span>Enforcement coverage</span><span class='metric-value'>{enforcement_pct}%</span></div><div class='progress success'><span style='width:{enforcement_pct}%'></span></div>
         <div class='metric-row'><span>Online in last 10 minutes</span><span class='metric-value'>{online_pct}%</span></div><div class='progress'><span style='width:{online_pct}%'></span></div>
         <div class='metric-row'><span>Devices needing update</span><span class='metric-value'>{update_attention}</span></div>
-        <div class='metric-row'><span>Pending approval queue</span><span class='metric-value'>{pending_count}</span></div>
+        <div class='metric-row'><span>Pending request queue</span><span class='metric-value'>{pending_count}</span></div>
       </div></div>
       <div><div class='section-head'><h2>Blocked Activity · 7 Days</h2><a href='/reports/application-activity?period=7'>Activity report →</a></div><div class='panel'><div class='spark-bars'>{bars}</div><div class='muted' style='text-align:center'>{blocks_7d} total blocked events</div></div></div>
     </div>
@@ -3419,13 +3440,7 @@ def requests_page(q:str='', request_status:str='', organization_id:str='', reque
         }.get(i['status'],'')
         app=escape(i['product_name'] or filename(i['file_path']) or 'Installation request')
         when=display_time(i['created_at'])
-        action=''
-        if i['status']=='pending' and principal.can_approve:
-            action=f"<div class='action-stack'><form class='actions' method='post' action='/admin/installations/{i['id']}/approve'><label>Minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='installation-durations' style='width:82px'><button class='btn-primary'>Approve Installation</button></form><form method='post' action='/admin/installations/{i['id']}/deny'><button class='btn-danger'>Deny</button></form></div>"
-        elif i['status']=='approved':
-            action=f"<span class='muted'>Approved for {i['duration_minutes'] or 15} minutes. Waiting for the user to click Start Installation.</span>"
-        else:
-            action=f"<span class='muted'>{escape(i['decision_note'] or '')}</span>"
+        action=installation_request_actions(principal,i)
         installation_rendered.append(f"<tr><td><b>{app}</b><div class='muted'><code>{escape(i['file_path'] or '')}</code></div></td><td><a href='/devices/{i['device_id']}'>{escape(i['hostname'])}</a></td><td>{escape(i['requested_by'] or 'Administrator')}</td><td>{escape(when)}</td><td><span class='badge {status_class}'>{escape(status_text)}</span></td><td>{action}</td></tr>")
     installation_panel=f"<datalist id='installation-durations'><option value='15'><option value='30'><option value='60'></datalist><div class='section-head'><h2>Installation Requests</h2><span class='muted'>Admin approval grants a four-hour activation window; the timed Installation Mode starts only when the endpoint user clicks Start Installation.</span></div><div class='card'><table><tr><th>Installer / application</th><th>Device</th><th>Requested by</th><th>Requested</th><th>Status</th><th>Action</th></tr>{''.join(installation_rendered) or '<tr><td colspan=6><div class=empty>No installation requests.</div></td></tr>'}</table></div>"
     params_nav={'q':q,'request_status':request_status,'organization_id':organization_id,'request_kind':request_kind,'period':period,'sort':sort}
