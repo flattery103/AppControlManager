@@ -153,6 +153,7 @@ class Release0172InstallationLearningTests(unittest.TestCase):
         self.assertIn("Task<InstallationFinalizationResult> FinalizeInstallationModeAsync", helper)
         self.assertNotIn("if (prep.Unpreparable > 0)", finalizer)
         self.assertIn("InstallationLearningReconciler.Create", finalizer)
+        self.assertIn("new InstallationLearnedFile(x.FilePath, x.RecordId)", finalizer)
         self.assertIn("SkippedCount = plan.SkippedCount", finalizer)
         self.assertIn("if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }", store)
         self.assertLess(finalizer.index("if (ready.Length > 0)"), finalizer.index("ForceEnforcementCoreAsync"))

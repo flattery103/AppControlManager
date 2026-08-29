@@ -1,5 +1,7 @@
 namespace AppGuard.Core;
 
+public sealed record InstallationLearnedFile(string? FilePath, long? RecordId);
+
 public sealed class InstallationLearningPlan
 {
     public IReadOnlyList<string> RequiredRuleKeys { get; init; } = [];
@@ -9,29 +11,24 @@ public sealed class InstallationLearningPlan
 public static class InstallationLearningReconciler
 {
     public static InstallationLearningPlan Create(
-        IEnumerable<string?> learnedPaths,
+        IEnumerable<InstallationLearnedFile> learnedFiles,
         IReadOnlyDictionary<string, string> preparedRuleKeysByPath,
         IEnumerable<LearningRuleReference> existingReferences,
         ISet<string> readyRuleKeys,
         Func<string, bool> isAvailable)
     {
         var references = existingReferences
-            .Where(x => !string.IsNullOrWhiteSpace(x.FilePath) && !string.IsNullOrWhiteSpace(x.RuleKey))
-            .GroupBy(x => x.FilePath.Trim(), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.Last().RuleKey, StringComparer.OrdinalIgnoreCase);
+            .Where(x => x.RecordId.HasValue && !string.IsNullOrWhiteSpace(x.FilePath) && !string.IsNullOrWhiteSpace(x.RuleKey))
+            .ToArray();
+        var learned = learnedFiles.ToArray();
         var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var skipped = 0;
+        var skipped = learned.Count(x => string.IsNullOrWhiteSpace(x.FilePath));
 
-        foreach (var learnedPath in learnedPaths)
+        foreach (var group in learned
+                     .Where(x => !string.IsNullOrWhiteSpace(x.FilePath))
+                     .GroupBy(x => x.FilePath!.Trim(), StringComparer.OrdinalIgnoreCase))
         {
-            var path = (learnedPath ?? string.Empty).Trim();
-            if (path.Length == 0)
-            {
-                skipped++;
-                continue;
-            }
-            if (!seenPaths.Add(path)) continue;
+            var path = group.Key;
 
             if (preparedRuleKeysByPath.TryGetValue(path, out var preparedKey) &&
                 !string.IsNullOrWhiteSpace(preparedKey) &&
@@ -40,7 +37,14 @@ public static class InstallationLearningReconciler
                 required.Add(preparedKey);
                 continue;
             }
-            if (references.TryGetValue(path, out var existingKey) && readyRuleKeys.Contains(existingKey))
+            var currentRecordIds = group.Where(x => x.RecordId.HasValue).Select(x => x.RecordId!.Value).ToHashSet();
+            var existingKey = references
+                .Where(x => string.Equals(x.FilePath.Trim(), path, StringComparison.OrdinalIgnoreCase) &&
+                            x.RecordId.HasValue && currentRecordIds.Contains(x.RecordId.Value) &&
+                            readyRuleKeys.Contains(x.RuleKey))
+                .Select(x => x.RuleKey)
+                .LastOrDefault();
+            if (!string.IsNullOrWhiteSpace(existingKey))
             {
                 required.Add(existingKey);
                 continue;

@@ -561,7 +561,7 @@ public sealed class PolicyHelper
                     .Select(x => x.CacheKey)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var plan = InstallationLearningReconciler.Create(
-                    learned.Select(x => x.FilePath),
+                    learned.Select(x => new InstallationLearnedFile(x.FilePath, x.RecordId)),
                     prep.PreparedRuleKeysByPath,
                     snapshot.Learning,
                     readyExistingRuleKeys,
