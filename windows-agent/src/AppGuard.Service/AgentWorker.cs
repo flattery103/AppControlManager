@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ServiceProcess;
 using System.Text.Json;
 using AppGuard.Core;
 using Microsoft.Extensions.Hosting;
@@ -7,7 +8,10 @@ namespace AppGuard.Service;
 
 public sealed class AgentWorker : BackgroundService
 {
-    private static readonly string Version = typeof(AgentWorker).Assembly.GetName().Version?.ToString(3) ?? "0.18.3";
+    private static readonly string Version = typeof(AgentWorker).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+        .FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "1.0.0-rc.1";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;
@@ -103,7 +107,12 @@ public sealed class AgentWorker : BackgroundService
             BackgroundPolicyPending = background.Pending,
             BackgroundPolicyFailed = background.Failed,
             BackgroundPolicyError = background.LastError,
-            BackgroundPolicyOldestAt = background.OldestPendingAt
+            BackgroundPolicyOldestAt = background.OldestPendingAt,
+            BackgroundWork = _backgroundPolicy.GetWorkSummaries().ToList(),
+            ServiceStatus = "running",
+            RuleWorkerStatus = ServiceController.GetServices().Any(x => x.ServiceName == "AppControlManagerRuleWorker" && x.Status == ServiceControllerStatus.Running) ? "running" : "stopped",
+            TrayStatus = Process.GetProcessesByName("AppControlManager.Tray").Length > 0 ? "running" : "not_running",
+            LastCommandPollAt = DateTimeOffset.UtcNow.ToString("O")
         }, ct);
         try { await _updater.CleanupPreviousTrustAsync(Version, ct); } catch (Exception ex) { _log.Write("agent-update cleanup: " + ex.Message); }
         if (_loop == 1 || _loop % 20 == 0) _log.Write("heartbeat OK mode=" + mode + (string.IsNullOrWhiteSpace(update.Status) ? "" : " update=" + update.Status));
@@ -347,6 +356,16 @@ public sealed class AgentWorker : BackgroundService
                         complete.Success = true;
                         complete.Result = $"Reset {retried.RulesReset} failed rule job(s) and {retried.BundlesReset} failed bundle job(s) to queued.";
                         _log.Write($"command {command.Id} retried background policy work rules={retried.RulesReset} bundles={retried.BundlesReset}");
+                        break;
+                    case "retry_background_policy_item":
+                        var retryDigest = PayloadString(command, "key_digest") ?? "";
+                        complete.Success = _backgroundPolicyStore.RetryWorkItem(retryDigest);
+                        complete.Result = complete.Success ? "Background policy item returned to queued." : "Background policy item was not eligible for retry.";
+                        break;
+                    case "dismiss_background_policy_item":
+                        var dismissDigest = PayloadString(command, "key_digest") ?? "";
+                        complete.Success = _backgroundPolicyStore.DismissWorkItem(dismissDigest);
+                        complete.Result = complete.Success ? "Background policy item dismissed from attention." : "Background policy item was not eligible for dismissal.";
                         break;
                     default:
                         throw new InvalidOperationException("Unknown command type " + command.CommandType);

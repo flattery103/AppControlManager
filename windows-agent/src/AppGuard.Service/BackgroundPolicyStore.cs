@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using AppGuard.Core;
 
 namespace AppGuard.Service;
@@ -245,6 +246,23 @@ public sealed class BackgroundPolicyStore
             };
         });
 
+    public IReadOnlyList<BackgroundWorkSummary> GetWorkSummaries(int maxItems = 25)
+        => WithSnapshot(snapshot => snapshot.Rules
+            .Where(x => x.Status != BackgroundPolicyStatuses.Installed)
+            .OrderByDescending(x => x.UpdatedAt, StringComparer.Ordinal)
+            .Take(Math.Clamp(maxItems, 1, 25))
+            .Select(x => new BackgroundWorkSummary
+            {
+                KeyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x.CacheKey))).ToLowerInvariant(),
+                DisplayName = Limit(x.ProductName ?? (x.Kind == "hash" ? "Hash authorization" : "Background policy"), 256),
+                Kind = Limit(x.Kind, 40),
+                Status = x.Status == BackgroundPolicyStatuses.Expired ? BackgroundPolicyStatuses.NeedsAttention : x.Status,
+                Attempts = x.Attempts,
+                RuleMode = x.Kind,
+                ErrorCategory = string.IsNullOrWhiteSpace(x.LastError) ? null : ClassifyError(x.LastError),
+                UpdatedAt = x.UpdatedAt
+            }).ToList());
+
     public BackgroundPolicyRetryResult RetryFailedWork()
         => Mutate(snapshot =>
         {
@@ -269,7 +287,30 @@ public sealed class BackgroundPolicyStore
             return new BackgroundPolicyRetryResult { RulesReset = rules, BundlesReset = bundles };
         });
 
-    public LearningPreparationStats PrepareLearningEvents(IEnumerable<EventUpload> events)
+    public bool RetryWorkItem(string keyDigest)
+        => Mutate(snapshot =>
+        {
+            var entry = FindRuleByDigest(snapshot, keyDigest);
+            if (entry is null || entry.Status is not (BackgroundPolicyStatuses.Failed or BackgroundPolicyStatuses.NeedsAttention)) return false;
+            entry.Status = BackgroundPolicyStatuses.Queued;
+            entry.Attempts = 0;
+            entry.LastError = null;
+            entry.UpdatedAt = Now();
+            return true;
+        });
+
+    public bool DismissWorkItem(string keyDigest)
+        => Mutate(snapshot =>
+        {
+            var entry = FindRuleByDigest(snapshot, keyDigest);
+            if (entry is null || entry.Status is not (BackgroundPolicyStatuses.Failed or BackgroundPolicyStatuses.NeedsAttention)) return false;
+            entry.Status = BackgroundPolicyStatuses.SkippedEphemeral;
+            entry.LastError = null;
+            entry.UpdatedAt = Now();
+            return true;
+        });
+
+    public LearningPreparationStats PrepareLearningEvents(IEnumerable<EventUpload> events, bool activeInstallationSession = false)
     {
         var stats = new LearningPreparationStats();
         foreach (var item in events.Where(x => x.EventId == 3076))
@@ -285,6 +326,14 @@ public sealed class BackgroundPolicyStore
             var publisher = (item.Publisher ?? preservedMeta.Publisher ?? string.Empty).Trim();
             var product = (item.ProductName ?? preservedMeta.ProductName ?? string.Empty).Trim();
             var version = (item.FileVersion ?? preservedMeta.FileVersion ?? string.Empty).Trim();
+            var existingDurableCoverage = publisher.Length > 0 && product.Length > 0 && Snapshot().Rules.Any(x =>
+                x.Status == BackgroundPolicyStatuses.Ready && string.Equals(Normalize(x.Publisher ?? ""), Normalize(publisher), StringComparison.Ordinal)
+                && string.Equals(Normalize(x.ProductName ?? ""), Normalize(product), StringComparison.Ordinal));
+            var ephemeral = EphemeralExecutionClassifier.Classify(new EphemeralEvidence(
+                filePath, activeInstallationSession, publisher.Length > 0, false,
+                !string.IsNullOrWhiteSpace(item.ParentPath), false, false, existingDurableCoverage,
+                false, false, false));
+            if (ephemeral.Disposition == "expected_ephemeral") { stats.IgnoredEphemeral++; continue; }
             if (publisher.Length > 0 && IsSafeProductName(product) && Version.TryParse(version, out _))
             {
                 var key = $"product|{Normalize(publisher)}|{Normalize(product)}";
@@ -388,4 +437,13 @@ public sealed class BackgroundPolicyStore
     private BackgroundBundleMember Clone(BackgroundBundleMember value) => JsonSerializer.Deserialize<BackgroundBundleMember>(JsonSerializer.Serialize(value, _json), _json)!;
     private static string Now() => DateTimeOffset.UtcNow.ToString("O");
     private static string Limit(string value, int max) => value.Length <= max ? value : value[..max];
+    private static string ClassifyError(string value)
+    {
+        if (value.Contains("timed out", StringComparison.OrdinalIgnoreCase) || value.Contains("within", StringComparison.OrdinalIgnoreCase)) return "timeout";
+        if (value.Contains("no longer available", StringComparison.OrdinalIgnoreCase) || value.Contains("expired", StringComparison.OrdinalIgnoreCase)) return "representative_unavailable";
+        if (value.Contains("match", StringComparison.OrdinalIgnoreCase) || value.Contains("integrity", StringComparison.OrdinalIgnoreCase)) return "integrity";
+        return "generation";
+    }
+    private static RuleCacheEntry? FindRuleByDigest(BackgroundPolicySnapshot snapshot, string digest)
+        => snapshot.Rules.FirstOrDefault(x => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x.CacheKey))).Equals(digest, StringComparison.OrdinalIgnoreCase));
 }

@@ -2,12 +2,34 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AppGuard.Core;
 
 namespace AppGuard.Service;
 
 public sealed class AgentUpdater
 {
+    internal readonly record struct ReleaseVersion(int Major, int Minor, int Patch, int Build, bool Final, int Rc)
+        : IComparable<ReleaseVersion>
+    {
+        private static readonly Regex Pattern = new(@"^v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-rc\.(\d+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        public static bool TryParse(string? value, out ReleaseVersion version)
+        {
+            var match = Pattern.Match((value ?? "").Trim());
+            if (!match.Success) { version = default; return false; }
+            version = new ReleaseVersion(int.Parse(match.Groups[1].Value), int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value),
+                match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 0, !match.Groups[5].Success,
+                match.Groups[5].Success ? int.Parse(match.Groups[5].Value) : 0);
+            return true;
+        }
+        public int CompareTo(ReleaseVersion other)
+        {
+            var numeric = (Major, Minor, Patch, Build).CompareTo((other.Major, other.Minor, other.Patch, other.Build));
+            if (numeric != 0) return numeric;
+            if (Final != other.Final) return Final ? 1 : -1;
+            return Rc.CompareTo(other.Rc);
+        }
+    }
     private readonly ApiClient _api;
     private readonly PolicyHelper _policies;
     private readonly FileLogger _log;
@@ -55,6 +77,10 @@ public sealed class AgentUpdater
     public async Task<StagedAgentUpdate> StageAsync(long commandId, string targetVersion, string sha256, string downloadPath, string currentVersion, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(targetVersion)) throw new InvalidOperationException("Update target version was empty.");
+        if (!ReleaseVersion.TryParse(targetVersion, out var target) || !ReleaseVersion.TryParse(currentVersion, out var current))
+            throw new InvalidOperationException("Agent update contains an unsupported version value.");
+        if (target.CompareTo(current) <= 0)
+            throw new InvalidOperationException($"Agent update target {targetVersion} is not newer than {currentVersion}.");
         if (string.IsNullOrWhiteSpace(sha256)) throw new InvalidOperationException("Update package SHA256 was empty.");
         if (string.IsNullOrWhiteSpace(downloadPath)) throw new InvalidOperationException("Update package download path was empty.");
 

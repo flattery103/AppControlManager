@@ -23,7 +23,7 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("learning_mode")] public bool LearningMode { get; set; }
     [JsonPropertyName("policy_mode")] public string PolicyMode { get; set; } = "unknown";
     [JsonPropertyName("script_enforcement_disabled")] public bool? ScriptEnforcementDisabled { get; set; }
-    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "0.18.3";
+    [JsonPropertyName("agent_version")] public string AgentVersion { get; set; } = "1.0.0-rc.1";
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
     [JsonPropertyName("update_status")] public string? UpdateStatus { get; set; }
     [JsonPropertyName("update_result")] public string? UpdateResult { get; set; }
@@ -32,6 +32,14 @@ public sealed class HeartbeatRequest
     [JsonPropertyName("background_policy_failed")] public int? BackgroundPolicyFailed { get; set; }
     [JsonPropertyName("background_policy_error")] public string? BackgroundPolicyError { get; set; }
     [JsonPropertyName("background_policy_oldest_at")] public string? BackgroundPolicyOldestAt { get; set; }
+    [JsonPropertyName("background_work")] public List<BackgroundWorkSummary> BackgroundWork { get; set; } = [];
+    [JsonPropertyName("service_status")] public string ServiceStatus { get; set; } = "running";
+    [JsonPropertyName("rule_worker_status")] public string? RuleWorkerStatus { get; set; }
+    [JsonPropertyName("tray_status")] public string? TrayStatus { get; set; }
+    [JsonPropertyName("last_policy_refresh_at")] public string? LastPolicyRefreshAt { get; set; }
+    [JsonPropertyName("last_background_success_at")] public string? LastBackgroundSuccessAt { get; set; }
+    [JsonPropertyName("last_event_upload_at")] public string? LastEventUploadAt { get; set; }
+    [JsonPropertyName("last_command_poll_at")] public string? LastCommandPollAt { get; set; }
 }
 
 public sealed class EventUpload

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import qrcode
 
 from release_management import GitHubReleaseInfo, fetch_latest_release
@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.18.3")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.1")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -422,6 +422,14 @@ def init_db():
         ensure_column(conn, "devices", "background_policy_failed", "INTEGER")
         ensure_column(conn, "devices", "background_policy_error", "TEXT")
         ensure_column(conn, "devices", "background_policy_oldest_at", "TEXT")
+        ensure_column(conn, "devices", "background_work_json", "TEXT")
+        ensure_column(conn, "devices", "service_status", "TEXT")
+        ensure_column(conn, "devices", "rule_worker_status", "TEXT")
+        ensure_column(conn, "devices", "tray_status", "TEXT")
+        ensure_column(conn, "devices", "last_policy_refresh_at", "TEXT")
+        ensure_column(conn, "devices", "last_background_success_at", "TEXT")
+        ensure_column(conn, "devices", "last_event_upload_at", "TEXT")
+        ensure_column(conn, "devices", "last_command_poll_at", "TEXT")
         ensure_column(conn, "devices", "offboard_status", "TEXT")
         ensure_column(conn, "devices", "offboard_result", "TEXT")
         ensure_column(conn, "devices", "offboard_requested_at", "TEXT")
@@ -432,6 +440,7 @@ def init_db():
         ensure_column(conn, "agent_releases", "installer_size_bytes", "INTEGER")
         ensure_column(conn, "agent_releases", "deleted_at", "TEXT")
         ensure_column(conn, "agent_releases", "deleted_by", "TEXT")
+        ensure_column(conn, "agent_deployments", "status", "TEXT NOT NULL DEFAULT 'active'")
         ensure_column(conn, "devices", "organization_id", "INTEGER")
         ensure_column(conn, "devices", "group_id", "INTEGER")
         ensure_column(conn, "commands", "started_at", "TEXT")
@@ -600,6 +609,56 @@ class Principal:
         return self.role in {'global_admin', 'org_admin', 'approver'}
 
 
+@dataclass(frozen=True)
+class OperationalFilters:
+    query: str = ''
+    status: str = ''
+    organization_id: Optional[int] = None
+    group_id: Optional[int] = None
+    device_id: str = ''
+    date_from: str = ''
+    date_to: str = ''
+    page: int = 1
+
+
+def parse_operational_filters(params, principal: Principal) -> OperationalFilters:
+    query=str(params.get('q') or '').strip()
+    if len(query)>256: raise ValueError('Search text is limited to 256 characters.')
+    status_value=str(params.get('status') or '').strip().lower()
+    if len(status_value)>40 or (status_value and not re.fullmatch(r'[a-z0-9_]+',status_value)):
+        raise ValueError('Invalid operational status.')
+    def optional_int(name):
+        value=str(params.get(name) or '').strip()
+        if not value: return None
+        number=int(value)
+        if number<1: raise ValueError(f'{name} must be positive.')
+        return number
+    organization_id=optional_int('organization_id')
+    if not principal.can_manage_global and organization_id not in {None,principal.organization_id}:
+        raise PermissionError('Organization filter is outside the current principal scope.')
+    page_value=max(1,int(params.get('page') or 1))
+    return OperationalFilters(query,status_value,organization_id or principal.organization_id if not principal.can_manage_global else organization_id,
+                              optional_int('group_id'),str(params.get('device_id') or '')[:128],
+                              str(params.get('date_from') or '')[:40],str(params.get('date_to') or '')[:40],page_value)
+
+
+def classify_device_health(row, now: Optional[datetime]=None) -> tuple[str,list[str]]:
+    now=now or datetime.now(timezone.utc); reasons=[]
+    def value(name, default=None):
+        try: return row[name]
+        except (KeyError,IndexError): return default
+    try: last_seen=datetime.fromisoformat(value('last_seen') or '')
+    except Exception: last_seen=None
+    if not last_seen or now-last_seen.astimezone(timezone.utc)>timedelta(minutes=10): return 'Offline',['No heartbeat within 10 minutes.']
+    if int(value('background_policy_failed',0) or 0)>0 or str(value('update_status','') or '').lower() in {'failed','rolled_back'}:
+        return 'Failed',['A background policy or update operation failed.']
+    if str(value('service_status','running') or '').lower() not in {'running','healthy'} or str(value('rule_worker_status','running') or '').lower() not in {'running','healthy'}:
+        return 'Attention',['A required endpoint service is not running.']
+    if str(value('background_policy_status','') or '').lower() in {'processing','queued','working'} or str(value('update_status','') or '').lower() in {'queued','downloading','staging','activating','installing'}:
+        return 'Working',['The endpoint is actively processing work.']
+    return 'Healthy',reasons
+
+
 def principal_can_see_org(principal: Principal, organization_id: Optional[int]) -> bool:
     return principal.role == 'global_admin' or (organization_id is not None and principal.organization_id == organization_id)
 
@@ -693,6 +752,59 @@ def find_scoped_policy(conn: sqlite3.Connection, device_id: str, req, action: st
         if device_matches_policy_scope(conn, device_id, row) and policy_identity_matches(row, req):
             return row
     return None
+
+
+def build_policy_explanation(conn: sqlite3.Connection, principal: Principal, *, device_id: str,
+                             file_path: Optional[str] = None, sha256: Optional[str] = None,
+                             request_id: Optional[int] = None, application_id: Optional[int] = None,
+                             block_id: Optional[int] = None) -> dict:
+    device=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
+    if not device: raise HTTPException(status_code=404,detail='Device not found')
+    require_org_access(principal,device['organization_id'])
+    normalized_hash=(sha256 or '').strip().lower()
+    normalized_path=(file_path or '').strip().lower()
+
+    def identity_clause(alias: str):
+        clauses=[]; params=[]
+        if block_id and alias=='b': clauses.append(f'{alias}.id=?'); params.append(block_id)
+        if application_id and alias=='a': clauses.append(f'{alias}.id=?'); params.append(application_id)
+        if request_id: clauses.append(f'{alias}.request_id=?' if alias!='r' else f'{alias}.id=?'); params.append(request_id)
+        if normalized_hash: clauses.append(f'lower({alias}.sha256)=?'); params.append(normalized_hash)
+        if normalized_path: clauses.append(f'lower({alias}.file_path)=?'); params.append(normalized_path)
+        return (' AND ('+' OR '.join(clauses)+')' if clauses else ''),params
+
+    clause,params=identity_clause('b')
+    blocked=conn.execute(f"SELECT b.* FROM blocked_applications b WHERE b.device_id=? AND b.status IN ('blocked','blocking')"+clause+" ORDER BY b.id DESC LIMIT 1",[device_id,*params]).fetchone()
+    if blocked:
+        return {'decision':'blocked','source':'explicit_block','scope':'device','device_id':device_id,
+                'file_path':blocked['file_path'],'sha256':blocked['sha256'],'publisher':blocked['publisher'],
+                'product_name':blocked['product_name'],'rule_type':blocked['rule_type'],'policy_id':blocked['policy_id'],
+                'actor':blocked['blocked_by'],'updated_at':blocked['blocked_at'] or blocked['created_at'],
+                'summary':'This application is blocked by an explicit AppControl Manager deny policy.'}
+
+    clause,params=identity_clause('a')
+    approved=conn.execute(f"""SELECT a.*,r.decided_by,r.request_kind,r.session_key
+        FROM approved_applications a LEFT JOIN approval_requests r ON r.id=a.request_id
+        WHERE a.device_id=? AND a.status='approved'"""+clause+" ORDER BY a.id DESC LIMIT 1",[device_id,*params]).fetchone()
+    if approved:
+        source='installation_session' if approved['request_kind']=='installation' else ('grouped_approval' if approved['request_kind']=='session' else 'manual_approval')
+        return {'decision':'allowed','source':source,'scope':'device','device_id':device_id,
+                'request_id':approved['request_id'],'file_path':approved['file_path'],'sha256':approved['sha256'],
+                'publisher':approved['publisher'],'product_name':approved['product_name'],'rule_type':approved['rule_type'],
+                'policy_id':approved['policy_id'],'actor':approved['decided_by'],'updated_at':approved['approved_at'],
+                'summary':'This application is allowed by an active AppControl Manager approval policy.'}
+
+    if normalized_hash or normalized_path:
+        probe=type('PolicyProbe',(),{'sha256':normalized_hash or None,'file_path':file_path,'publisher':None,'product_name':None})()
+        scoped=find_scoped_policy(conn,device_id,probe,'allow')
+        if scoped:
+            return {'decision':'allowed','source':'scoped_policy','scope':scoped['scope_type'],'device_id':device_id,
+                    'file_path':file_path,'sha256':sha256,'publisher':scoped['publisher'],'product_name':scoped['product_name'],
+                    'rule_type':scoped['rule_type'],'policy_id':None,'actor':scoped['created_by'],'updated_at':scoped['created_at'],
+                    'summary':f"This application matches active {scoped['scope_type']} allow policy #{scoped['id']}."}
+
+    return {'decision':'unknown','source':'none','scope':'device','device_id':device_id,'file_path':file_path,
+            'sha256':sha256,'policy_id':None,'summary':'No active AppControl Manager allow or block policy matched this identity.'}
 
 
 def choose_identity(req) -> str:
@@ -810,7 +922,8 @@ def queue_scoped_auto_approval(conn: sqlite3.Connection, device_id: str, req, po
 ALLOWED_AGENT_COMMANDS = {
     'approve_file','approve_session','revoke_approval','block_file','unblock_file',
     'update_agent','uninstall_agent','return_to_learning','enable_enforcement',
-    'start_installation_mode','end_installation_mode','retry_background_policy'
+    'start_installation_mode','end_installation_mode','retry_background_policy',
+    'retry_background_policy_item','dismiss_background_policy_item'
 }
 
 
@@ -858,6 +971,11 @@ def validate_agent_command(command_type: str, payload_text: str) -> Optional[str
         if not positive_int('installation_id'): return 'end_installation_mode requires a positive installation_id.'
     elif command_type == 'retry_background_policy':
         if not text('requested_by',256): return 'retry_background_policy requires requested_by.'
+    elif command_type in {'retry_background_policy_item','dismiss_background_policy_item'}:
+        if set(payload) != {'key_digest','requested_by'}:
+            return f'{command_type} accepts only key_digest and requested_by.' if payload else f'{command_type} requires key_digest and requested_by.'
+        if not re.fullmatch(r'[0-9a-f]{64}',str(payload.get('key_digest') or '')) or not text('requested_by',256):
+            return f'{command_type} requires key_digest and requested_by.'
     return None
 
 
@@ -997,11 +1115,10 @@ def backfill_approved_components(conn: sqlite3.Connection):
 
 
 def version_key(value: str):
-    parts=[]
-    for token in re.split(r'[.\-+]', (value or '').strip().lower()):
-        if token.isdigit(): parts.append((0,int(token)))
-        else: parts.append((1,token))
-    return tuple(parts)
+    match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-rc\.(\d+))?',(value or '').strip().lower())
+    if not match: raise ValueError(f'Unsupported AppControl Manager version: {value}')
+    major,minor,patch,build,rc=match.groups()
+    return (int(major),int(minor),int(patch),int(build or 0),1 if rc is None else 0,int(rc or 0))
 
 
 def version_at_least(current: Optional[str], minimum: str) -> bool:
@@ -1228,6 +1345,27 @@ class EnrollResponse(BaseModel):
     device_key: str
 
 
+class BackgroundWorkSummaryIn(BaseModel):
+    key_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    display_name: str = Field(min_length=1, max_length=256)
+    kind: str = Field(min_length=1, max_length=40)
+    status: str
+    attempts: int = Field(ge=0, le=100)
+    age_seconds: Optional[int] = Field(default=None, ge=0)
+    elapsed_seconds: Optional[int] = Field(default=None, ge=0)
+    rule_mode: Optional[str] = Field(default=None, max_length=40)
+    error_category: Optional[str] = Field(default=None, max_length=80)
+    updated_at: str = Field(max_length=80)
+
+    @field_validator("status")
+    @classmethod
+    def valid_status(cls, value: str) -> str:
+        allowed = {"queued", "processing", "ready", "installed", "skipped_ephemeral", "needs_attention", "failed"}
+        if value not in allowed:
+            raise ValueError("invalid background work status")
+        return value
+
+
 class HeartbeatRequest(BaseModel):
     learning_mode: Optional[bool] = None
     policy_mode: Optional[str] = None
@@ -1241,6 +1379,14 @@ class HeartbeatRequest(BaseModel):
     background_policy_failed: Optional[int] = None
     background_policy_error: Optional[str] = Field(default=None, max_length=1000)
     background_policy_oldest_at: Optional[str] = Field(default=None, max_length=80)
+    background_work: list[BackgroundWorkSummaryIn] = Field(default_factory=list, max_length=50)
+    service_status: Optional[str] = Field(default=None, max_length=40)
+    rule_worker_status: Optional[str] = Field(default=None, max_length=40)
+    tray_status: Optional[str] = Field(default=None, max_length=40)
+    last_policy_refresh_at: Optional[str] = Field(default=None, max_length=80)
+    last_background_success_at: Optional[str] = Field(default=None, max_length=80)
+    last_event_upload_at: Optional[str] = Field(default=None, max_length=80)
+    last_command_poll_at: Optional[str] = Field(default=None, max_length=80)
 
 
 class EventIn(BaseModel):
@@ -1484,6 +1630,26 @@ def admin_auth(request: Request) -> Principal:
         return Principal(row['id'], row['username'], row['display_name'] or row['username'], row['role'], row['organization_id'], bool(row['force_password_change']))
 
 
+@app.get('/api/policy-explanation')
+def policy_explanation_api(device_id:str, file_path:Optional[str]=None, sha256:Optional[str]=None,
+                           request_id:Optional[int]=None, application_id:Optional[int]=None,
+                           block_id:Optional[int]=None, principal:Principal=Depends(admin_auth)):
+    with db() as conn:
+        return build_policy_explanation(conn,principal,device_id=device_id,file_path=file_path,sha256=sha256,
+                                        request_id=request_id,application_id=application_id,block_id=block_id)
+
+
+@app.get('/policy-explanation')
+def policy_explanation_page(device_id:str, file_path:Optional[str]=None, sha256:Optional[str]=None,
+                            request_id:Optional[int]=None, application_id:Optional[int]=None,
+                            block_id:Optional[int]=None, principal:Principal=Depends(admin_auth)):
+    with db() as conn:
+        result=build_policy_explanation(conn,principal,device_id=device_id,file_path=file_path,sha256=sha256,
+                                        request_id=request_id,application_id=application_id,block_id=block_id)
+    details=''.join(f"<tr><th>{escape(str(k).replace('_',' ').title())}</th><td>{escape(str(v or '—'))}</td></tr>" for k,v in result.items() if k!='summary')
+    return page('Policy explanation',f"<div class='panel'><h2>{escape(result['summary'])}</h2><table>{details}</table></div>",principal)
+
+
 def _menu(label: str, items: list[tuple[str, str]], extra_class: str = '') -> str:
     links = ''.join(f"<a href='{url}'>{escape(text)}</a>" for url, text in items)
     return f"<div class='nav-menu {extra_class}'><button class='nav-trigger' type='button'>{escape(label)} <span class='chev'>▾</span></button><div class='nav-dropdown'>{links}</div></div>"
@@ -1532,7 +1698,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.18.3</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.1</div></aside>"
     )
 
 
@@ -1930,7 +2096,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.18.3"}
+    return {"ok": True, "version": "1.0.0-rc.1"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -1975,7 +2141,13 @@ def heartbeat(req: HeartbeatRequest, device_id: str = Depends(agent_auth)):
                background_policy_pending=COALESCE(?,background_policy_pending),
                background_policy_failed=COALESCE(?,background_policy_failed),
                background_policy_error=CASE WHEN ? THEN ? ELSE background_policy_error END,
-               background_policy_oldest_at=CASE WHEN ? THEN ? ELSE background_policy_oldest_at END WHERE id=?""",
+               background_policy_oldest_at=CASE WHEN ? THEN ? ELSE background_policy_oldest_at END,
+               background_work_json=?,service_status=COALESCE(?,service_status),
+               rule_worker_status=COALESCE(?,rule_worker_status),tray_status=COALESCE(?,tray_status),
+               last_policy_refresh_at=COALESCE(?,last_policy_refresh_at),
+               last_background_success_at=COALESCE(?,last_background_success_at),
+               last_event_upload_at=COALESCE(?,last_event_upload_at),
+               last_command_poll_at=COALESCE(?,last_command_poll_at) WHERE id=?""",
             (
                 utcnow(), 1 if learning else 0, mode,
                 None if req.script_enforcement_disabled is None else (1 if req.script_enforcement_disabled else 0),
@@ -1983,6 +2155,10 @@ def heartbeat(req: HeartbeatRequest, device_id: str = Depends(agent_auth)):
                 req.background_policy_status, req.background_policy_pending, req.background_policy_failed,
                 1 if "background_policy_error" in req.model_fields_set else 0, req.background_policy_error,
                 1 if "background_policy_oldest_at" in req.model_fields_set else 0, req.background_policy_oldest_at,
+                json.dumps([item.model_dump() for item in req.background_work], separators=(",", ":")),
+                req.service_status, req.rule_worker_status, req.tray_status,
+                req.last_policy_refresh_at, req.last_background_success_at,
+                req.last_event_upload_at, req.last_command_poll_at,
                 device_id,
             ),
         )
@@ -3589,9 +3765,11 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
             installation_banner=f"<div class='notice-info'><b>{headline}</b><div>Session #{installation['id']} · {installation['duration_minutes'] or 15} minute window · status {escape(install_status.title())}</div>{countdown}{end_action}</div>"
         elif mode_name!='Learning':
             installation_controls=f"<form class='actions' method='post' action='/admin/devices/{device_id}/installation-mode/start'><label>Installation Mode minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='device-installation-durations' style='width:82px'><datalist id='device-installation-durations'><option value='15'><option value='30'><option value='60'></datalist><button class='btn-primary'>Start Installation Mode</button></form>"
-    status_online=bool(d['last_seen'] and d['last_seen']>=(datetime.now(timezone.utc)-timedelta(minutes=10)).isoformat())
-    status_badge=f"<span class='badge {'badge-ok' if status_online else 'badge-warn'}'>{'Online' if status_online else 'Offline'}</span>"
-    control_panel=f"{installation_banner}<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Connectivity</span>{status_badge}</div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}{installation_controls}</div>"
+    health_state,health_reasons=classify_device_health(d)
+    health_cls='badge-ok' if health_state=='Healthy' else ('badge-warn' if health_state in {'Working','Attention','Offline'} else 'badge-bad')
+    status_badge=f"<span class='badge {health_cls}'>{escape(health_state)}</span>"
+    health_detail='; '.join(health_reasons) or 'All reported endpoint components are healthy.'
+    control_panel=f"{installation_banner}<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Health</span>{status_badge}<div class='muted'>{escape(health_detail)}</div></div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}{installation_controls}</div>"
     if installation and installation['ends_at'] and install_status == 'active':
         control_panel += "<script>(function(){const e=document.getElementById('installation-countdown');if(!e)return;const end=Date.parse(e.dataset.ends);function tick(){const ms=Math.max(0,end-Date.now());const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);e.textContent='Time remaining: '+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');}tick();setInterval(tick,1000);})();</script>"
     # control_panel is assembled above with installation controls.
@@ -3604,7 +3782,11 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         background_error=(d['background_policy_error'] or '').strip()
         oldest_background=display_time(d['background_policy_oldest_at']) if d['background_policy_oldest_at'] else ''
         retry_action=(f"<form class='actions' method='post' action='/admin/devices/{device_id}/background-policy/retry'><button class='btn-warning'>Retry Failed Background Work</button></form>" if principal.can_approve and background_failed > 0 and not command_busy else '')
-        background_panel=f"<div class='panel'><h2>Background Policy Work</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Status</span><b>{escape(background_status)}</b></div><div class='detail-item'><span class='muted'>Pending</span><b>{background_pending}</b></div><div class='detail-item'><span class='muted'>Failed</span><b>{background_failed}</b></div><div class='detail-item'><span class='muted'>Oldest pending</span>{escape(oldest_background or '—')}</div></div>"+(f"<div class='notice-warn'><b>Last background error</b><div>{escape(background_error)}</div></div>" if background_error else '')+f"{retry_action}<p class='muted'>Primary approvals remain installed while AppControl Manager prepares auxiliary application coverage.</p></div>"
+        try: background_items=json.loads(d['background_work_json'] or '[]')
+        except Exception: background_items=[]
+        item_rows=''.join(f"<tr><td>{escape(str(item.get('display_name') or 'Background policy'))}</td><td>{escape(str(item.get('kind') or ''))}</td><td><span class='badge'>{escape(str(item.get('status') or '').replace('_',' ').title())}</span></td><td>{int(item.get('attempts') or 0)}</td><td>{escape(str(item.get('error_category') or '—'))}</td><td>{display_time(item.get('updated_at'))}</td></tr>" for item in background_items)
+        detail_table=(f"<table><tr><th>Item</th><th>Kind</th><th>Status</th><th>Attempts</th><th>Diagnostic</th><th>Updated</th></tr>{item_rows}</table>" if item_rows else '')
+        background_panel=f"<div class='panel'><h2>Background Policy Work</h2><div class='details-grid'><div class='detail-item'><span class='muted'>Status</span><b>{escape(background_status)}</b></div><div class='detail-item'><span class='muted'>Pending</span><b>{background_pending}</b></div><div class='detail-item'><span class='muted'>Failed</span><b>{background_failed}</b></div><div class='detail-item'><span class='muted'>Oldest pending</span>{escape(oldest_background or '—')}</div></div>"+(f"<div class='notice-warn'><b>Last background error</b><div>{escape(background_error)}</div></div>" if background_error else '')+f"{detail_table}{retry_action}<p class='muted'>Primary approvals remain installed while AppControl Manager prepares auxiliary application coverage.</p></div>"
     jump="<div class='actions no-print' style='margin-bottom:18px'><a class='button btn-quiet' href='#policies'>Effective Policies</a><a class='button btn-quiet' href='#activity'>Activity</a><a class='button btn-quiet' href='#approved-apps'>Approvals</a><a class='button btn-quiet' href='#blocked-apps'>Blocks</a><a class='button btn-quiet' href='#requests'>Requests</a></div>"
     body=f"""<div class='grid'><div class='stat'><span class='stat-label'>Organization</span><b style='font-size:18px'>{escape(d['organization_name'] or '')}</b></div><div class='stat'><span class='stat-label'>Device Group</span><b style='font-size:18px'>{escape(d['group_name'] or 'None')}</b></div><div class='stat'><span class='stat-label'>App Control Mode</span><b style='font-size:18px'>{escape(mode_name)}</b></div><div class='stat'><span class='stat-label'>Agent Version</span><b style='font-size:18px'>{escape(d['agent_version'] or '')}</b></div></div>
 {jump}{control_panel}{background_panel}
@@ -4189,7 +4371,7 @@ def agent_updates_page(principal:Principal=Depends(admin_auth)):
     for g in groups: scope_options.append(f"<option value='group:{g['id']}'>Group: {escape(g['organization_name'])} / {escape(g['name'])}</option>")
     # Device targeting is useful for canary/testing overrides.
     for d in devices[:1000]: scope_options.append(f"<option value='device:{escape(d['id'])}'>Device: {escape(d['hostname'])}</option>")
-    deploy_form=f"""<div class='panel'><h2 style='margin-top:0'>Automatic Agent Update Policy</h2><p class='muted'>Create an ongoing update rule. More specific rules override broader rules: Device → Group → Organization → Global.</p><form method='post' action='/admin/agent-deployments'><div class='grid-3'><div class='field'><label>Update Policy</label><select name='release_target'>{''.join(release_options)}</select></div><div class='field'><label>Apply To</label><select name='scope_target'>{''.join(scope_options)}</select></div><div class='field'><label>Rollout</label><select name='rollout_percent'><option value='10'>10% canary</option><option value='25'>25% staged</option><option value='50'>50% staged</option><option value='100' selected>100%</option></select></div></div><button class='btn-primary'>Create Update Policy</button></form></div>"""
+    deploy_form=f"""<div class='panel'><h2 style='margin-top:0'>Automatic Agent Update Policy</h2><p class='muted'>Create an ongoing update rule. More specific rules override broader rules: Device → Group → Organization → Global.</p><form method='post' action='/admin/agent-deployments'><div class='grid-3'><div class='field'><label>Update Policy</label><select name='release_target'>{''.join(release_options)}</select></div><div class='field'><label>Apply To</label><select name='scope_target'>{''.join(scope_options)}</select></div><div class='field'><label>Rollout</label><select name='rollout_percent'><option value='10'>10% canary</option><option value='25'>25% staged</option><option value='50'>50% staged</option><option value='100' selected>100%</option></select></div></div><label><input type='checkbox' name='start_paused' value='1' checked> Start paused for administrator review</label><div><button class='btn-primary'>Create Update Policy</button></div></form></div>"""
     rr=[]
     for r in releases:
         action=''
@@ -4315,7 +4497,7 @@ def delete_agent_release(release_id:int, principal:Principal=Depends(admin_auth)
 
 
 @app.post('/admin/agent-deployments')
-def create_agent_deployment(release_target:str=Form(...),scope_target:str=Form(...),rollout_percent:int=Form(100),principal:Principal=Depends(admin_auth)):
+def create_agent_deployment(release_target:str=Form(...),scope_target:str=Form(...),rollout_percent:int=Form(100),start_paused:int=Form(0),principal:Principal=Depends(admin_auth)):
     require_org_admin(principal)
     try: rkind,rvalue=release_target.split(':',1); skind,svalue=scope_target.split(':',1)
     except ValueError: raise HTTPException(status_code=400,detail='Invalid deployment target.')
@@ -4341,7 +4523,9 @@ def create_agent_deployment(release_target:str=Form(...),scope_target:str=Form(.
             release_id=r['id']
         elif rkind=='channel' and rvalue in {'stable','beta'}: channel=rvalue
         else: raise HTTPException(status_code=400,detail='Invalid release target.')
-        cur=conn.execute('INSERT INTO agent_deployments(release_id,channel,scope_type,scope_id,organization_id,rollout_percent,active,created_at,created_by) VALUES(?,?,?,?,?,?,1,?,?)',(release_id,channel,skind,svalue or None,org_id,rollout_percent,utcnow(),principal.username))
+        active=0 if int(start_paused or 0) else 1
+        deployment_status='paused' if not active else 'active'
+        cur=conn.execute('INSERT INTO agent_deployments(release_id,channel,scope_type,scope_id,organization_id,rollout_percent,active,status,created_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)',(release_id,channel,skind,svalue or None,org_id,rollout_percent,active,deployment_status,utcnow(),principal.username))
         audit(conn,principal.username,'agent_deployment_created',organization_id=org_id,object_type='agent_deployment',object_id=cur.lastrowid,detail=f'{release_target} -> {scope_target} @ {rollout_percent}%')
         refresh_all_device_update_targets(conn)
     return RedirectResponse('/agent-updates',status_code=303)
@@ -4356,7 +4540,7 @@ def toggle_agent_deployment(deployment_id:int,principal:Principal=Depends(admin_
         if d['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator permission required.')
         if d['organization_id']: require_org_access(principal,d['organization_id'])
         active=0 if d['active'] else 1
-        conn.execute('UPDATE agent_deployments SET active=?,disabled_at=?,disabled_by=? WHERE id=?',(active,None if active else utcnow(),None if active else principal.username,deployment_id))
+        conn.execute('UPDATE agent_deployments SET active=?,status=?,disabled_at=?,disabled_by=? WHERE id=?',(active,'active' if active else 'paused',None if active else utcnow(),None if active else principal.username,deployment_id))
         if not active:
             cancel_pending_agent_updates(conn,deployment_id=deployment_id,reason='Agent deployment was paused before endpoint processing.')
         audit(conn,principal.username,'agent_deployment_toggled',organization_id=d['organization_id'],object_type='agent_deployment',object_id=deployment_id,detail='resumed' if active else 'paused')
@@ -5013,6 +5197,36 @@ def retry_background_policy(device_id:str, principal:Principal=Depends(admin_aut
         conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',(device_id,'retry_background_policy',payload,'pending',utcnow()))
         audit(conn,principal.username,'background_policy_retry_queued',organization_id=d['organization_id'],device_id=device_id,object_type='device',object_id=device_id,detail=f"failed={int(d['background_policy_failed'] or 0)}")
     return RedirectResponse(f'/devices/{device_id}',status_code=303)
+
+
+def queue_background_item_command(device_id: str, key_digest: str, command_type: str,
+                                  action: str, principal: Principal):
+    require_approver(principal)
+    if not re.fullmatch(r'[0-9a-f]{64}', key_digest or ''):
+        raise HTTPException(status_code=400, detail='Background work key digest is invalid')
+    with db() as conn:
+        device=conn.execute('SELECT * FROM devices WHERE id=?',(device_id,)).fetchone()
+        if not device: raise HTTPException(status_code=404, detail='Device not found')
+        require_org_access(principal, device['organization_id'])
+        if active_device_command(conn,device_id): return RedirectResponse(f'/devices/{device_id}?busy=1',status_code=303)
+        payload=json.dumps({'key_digest':key_digest,'requested_by':principal.username})
+        conn.execute('INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)',
+                     (device_id,command_type,payload,'pending',utcnow()))
+        audit(conn,principal.username,action,organization_id=device['organization_id'],device_id=device_id,
+              object_type='background_work',object_id=key_digest,detail=command_type)
+    return RedirectResponse(f'/devices/{device_id}',status_code=303)
+
+
+@app.post('/admin/devices/{device_id}/background-policy/{key_digest}/retry')
+def retry_background_policy_item(device_id:str, key_digest:str, principal:Principal=Depends(admin_auth)):
+    return queue_background_item_command(device_id,key_digest,'retry_background_policy_item',
+                                         'background_policy_item_retry_queued',principal)
+
+
+@app.post('/admin/devices/{device_id}/background-policy/{key_digest}/dismiss')
+def dismiss_background_policy_item(device_id:str, key_digest:str, principal:Principal=Depends(admin_auth)):
+    return queue_background_item_command(device_id,key_digest,'dismiss_background_policy_item',
+                                         'background_policy_item_dismiss_queued',principal)
 
 
 @app.post('/admin/devices/{device_id}/group')

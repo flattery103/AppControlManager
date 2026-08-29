@@ -1,4 +1,10 @@
-# AppControl Manager 0.18.3
+# AppControl Manager 1.0.0-rc.1
+
+## 1.0.0 Release Candidate 1
+
+Version 1.0.0-rc.1 is the feature-complete release candidate for production validation. It adds bounded endpoint health telemetry, detailed background-policy lifecycle and targeted recovery, policy decision explanations and lineage, operational filtering, controlled prerelease rollouts, conservative temporary-execution classification, and tested server backup/restore tooling.
+
+This is a prerelease. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
 ## 0.18.3 SHA-384 FilePublisher Validation
 
@@ -83,7 +89,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.3`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.1`:
 
 ```text
 AZURE_CLIENT_ID

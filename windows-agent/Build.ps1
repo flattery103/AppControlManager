@@ -1,6 +1,6 @@
 param(
     [string]$Configuration='Release',
-    [string]$Version='0.18.3',
+    [string]$Version='1.0.0-rc.1',
     [ValidateSet('Full','Prepare','Package')]
     [string]$Stage='Full',
     [switch]$RequireSignedPayload
@@ -9,6 +9,7 @@ $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
 $publish=Join-Path $root 'publish'
 $version=$Version
+$numericVersion=($version -replace '-.*$','') + '.0'
 $serviceExe=Join-Path $publish 'Service\AppControlManager.Service.exe'
 $trayExe=Join-Path $publish 'Tray\AppControlManager.Tray.exe'
 
@@ -43,10 +44,10 @@ if($Stage -eq 'Full' -or $Stage -eq 'Prepare'){
 
     Invoke-DotNet -Step 'Restoring solution...' -Arguments @('restore',(Join-Path $root 'AppGuard.sln'))
     Invoke-DotNet -Step 'Publishing AppControl Manager Windows service...' -Arguments @(
-        'publish',(Join-Path $root 'src\AppGuard.Service\AppGuard.Service.csproj'),'-c',$Configuration,'-r','win-x64','--self-contained','true','--no-restore','-p:PublishSingleFile=true',"-p:Version=$version",'-o',(Join-Path $publish 'Service')
+        'publish',(Join-Path $root 'src\AppGuard.Service\AppGuard.Service.csproj'),'-c',$Configuration,'-r','win-x64','--self-contained','true','--no-restore','-p:PublishSingleFile=true',"-p:Version=$version","-p:FileVersion=$numericVersion","-p:AssemblyVersion=$numericVersion","-p:InformationalVersion=$version",'-o',(Join-Path $publish 'Service')
     )
     Invoke-DotNet -Step 'Publishing AppControl Manager tray application...' -Arguments @(
-        'publish',(Join-Path $root 'src\AppGuard.Tray\AppGuard.Tray.csproj'),'-c',$Configuration,'-r','win-x64','--self-contained','true','--no-restore','-p:PublishSingleFile=true',"-p:Version=$version",'-o',(Join-Path $publish 'Tray')
+        'publish',(Join-Path $root 'src\AppGuard.Tray\AppGuard.Tray.csproj'),'-c',$Configuration,'-r','win-x64','--self-contained','true','--no-restore','-p:PublishSingleFile=true',"-p:Version=$version","-p:FileVersion=$numericVersion","-p:AssemblyVersion=$numericVersion","-p:InformationalVersion=$version",'-o',(Join-Path $publish 'Tray')
     )
 
     if(!(Test-Path $serviceExe)){ throw "Service publish completed without producing $serviceExe" }

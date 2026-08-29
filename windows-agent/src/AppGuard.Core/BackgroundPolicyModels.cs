@@ -11,6 +11,22 @@ public static class BackgroundPolicyStatuses
     public const string Superseded = "superseded";
     public const string Expired = "expired";
     public const string Failed = "failed";
+    public const string SkippedEphemeral = "skipped_ephemeral";
+    public const string NeedsAttention = "needs_attention";
+}
+
+public sealed class BackgroundWorkSummary
+{
+    [JsonPropertyName("key_digest")] public string KeyDigest { get; set; } = "";
+    [JsonPropertyName("display_name")] public string DisplayName { get; set; } = "";
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "";
+    [JsonPropertyName("status")] public string Status { get; set; } = "queued";
+    [JsonPropertyName("attempts")] public int Attempts { get; set; }
+    [JsonPropertyName("age_seconds")] public int? AgeSeconds { get; set; }
+    [JsonPropertyName("elapsed_seconds")] public int? ElapsedSeconds { get; set; }
+    [JsonPropertyName("rule_mode")] public string? RuleMode { get; set; }
+    [JsonPropertyName("error_category")] public string? ErrorCategory { get; set; }
+    [JsonPropertyName("updated_at")] public string UpdatedAt { get; set; } = "";
 }
 
 public sealed class RuleCacheEntry

@@ -14,6 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$isPrerelease = $Version -match '-rc\.\d+$'
 
 if (-not (Test-Path -LiteralPath $AssetsDirectory -PathType Container)) {
     throw "Release assets directory was not found: $AssetsDirectory"
@@ -36,13 +37,15 @@ try {
             throw 'GitHub release asset upload failed.'
         }
 
-        & $GhCommand release edit $Tag --title "AppControl Manager $Version" --latest
+        $editFlags = if ($isPrerelease) { @('--prerelease', '--latest=false') } else { @('--latest') }
+        & $GhCommand release edit $Tag --title "AppControl Manager $Version" @editFlags
         if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release update failed.'
         }
     }
     elseif ($probeExitCode -eq 1) {
-        & $GhCommand release create $Tag @assets --title "AppControl Manager $Version" --generate-notes --verify-tag
+        $createFlags = if ($isPrerelease) { @('--prerelease') } else { @() }
+        & $GhCommand release create $Tag @assets --title "AppControl Manager $Version" --generate-notes --verify-tag @createFlags
         if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release creation failed.'
         }

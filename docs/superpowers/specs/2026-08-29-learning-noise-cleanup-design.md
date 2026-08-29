@@ -24,4 +24,3 @@ Endpoint prompts remain fail-closed. No TEMP path is trusted. Repeated Code Inte
 
 - Regression tests cover cache wiring, fallback ordering, neutral expiry, legacy migration, retry isolation, and prompt deduplication.
 - Run the full Python suite, whitespace validation, and Windows behavior/build tests where the required Windows toolchain is available.
-

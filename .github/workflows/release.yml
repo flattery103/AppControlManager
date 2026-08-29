@@ -41,6 +41,9 @@ jobs:
       - name: Run GitHub Release publication probe tests
         shell: powershell
         run: .\.github\tests\Test-Publish-GitHubRelease.ps1
+      - name: Run prerelease publication behavior tests
+        shell: powershell
+        run: .\.github\tests\Test-Prerelease-Publishing.ps1
 
       - name: Build Windows executables for signing
         shell: powershell

@@ -10,7 +10,9 @@ namespace AppControlManager.Installer;
 
 internal static class Program
 {
-    private static readonly string Version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.18.3";
+    private static readonly string Version = typeof(Program).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.1";
 
     [STAThread]
     static void Main(string[] args)

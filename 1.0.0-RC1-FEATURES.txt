@@ -1,0 +1,14 @@
+AppControl Manager 1.0.0-rc.1
+
+This release candidate consolidates the feature set intended for the 1.0 production line.
+
+- Bounded operational telemetry reports endpoint, tray, Rule Worker, command, event, and background-policy health without exposing raw cache keys.
+- Background policy work has explicit lifecycle states, retry-all recovery, and constrained per-item retry or dismissal.
+- Policy explanation and lineage show why an application is allowed or blocked and preserve explicit block precedence.
+- Administrative filtering and health classification make large learning and enforcement pilots manageable.
+- Controlled rollout support accepts ordered release candidate versions, starts deployments paused, and publishes RC tags as GitHub prereleases.
+- Temporary execution classification requires an active installation session and corroborating evidence; it never creates blanket TEMP trust or authorization.
+- Server backup and restore scripts validate SQLite integrity and provide a recoverable rollback path.
+- Authorization-matrix tests cover every administrative and agent mutation route.
+
+Windows FileVersion and AssemblyVersion are 1.0.0.0. The product and informational version is 1.0.0-rc.1.

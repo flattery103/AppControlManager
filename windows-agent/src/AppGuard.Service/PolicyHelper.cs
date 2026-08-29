@@ -641,7 +641,7 @@ public sealed class PolicyHelper
                 var collectScript = Path.Combine(AppGuardPaths.ScriptsDirectory, "Get-LearnedApplications.ps1");
                 await RunPowerShellAsync(collectScript, "-Save", ct);
                 var learned = ReadLearnedApplications();
-                var prep = _backgroundStore.PrepareLearningEvents(learned);
+                var prep = _backgroundStore.PrepareLearningEvents(learned, activeInstallationSession: true);
 
                 var snapshot = _backgroundStore.Snapshot();
                 var readyExistingRuleKeys = snapshot.Rules
