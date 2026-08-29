@@ -55,6 +55,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("gh release view", publish)
         self.assertNotIn("gh release create", publish)
 
+    def test_release_probe_clears_expected_native_failure_exit_code(self):
+        text = (ROOT / ".github" / "tests" / "Test-Publish-GitHubRelease.ps1").read_text(encoding="utf-8")
+        expected_failure = text[text.index("$env:PROBE_EXIT = '2'"):]
+        self.assertIn("$global:LASTEXITCODE = 0", expected_failure)
+        self.assertIn("GitHub Release publication probe tests passed", expected_failure)
+
     def test_windows_ci_uses_node24_generation_actions(self):
         text = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
         self.assertIn("actions/checkout@v6", text)

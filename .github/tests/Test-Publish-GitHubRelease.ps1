@@ -55,3 +55,9 @@ finally {
     Remove-Item Env:PROBE_EXIT -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# The second case intentionally leaves the native command exit code nonzero even
+# though the expected PowerShell exception was caught and verified. GitHub's
+# PowerShell wrapper exits with that stale value unless the successful test clears it.
+$global:LASTEXITCODE = 0
+Write-Host 'GitHub Release publication probe tests passed (2 cases).'
