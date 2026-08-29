@@ -21,6 +21,11 @@ class WindowsStaticContractTests(unittest.TestCase):
         self.assertIn("_backgroundPolicyStore.GetWorkSummaries()", source)
         self.assertNotIn("_backgroundPolicy.GetWorkSummaries()", source)
 
+    def test_release_publisher_does_not_splat_single_flag_strings(self):
+        source = (ROOT / ".github/scripts/Publish-GitHubRelease.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("@createFlags", source)
+        self.assertNotIn("@editFlags", source)
+
 
 if __name__ == "__main__":
     unittest.main()

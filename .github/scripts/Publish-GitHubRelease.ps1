@@ -37,15 +37,23 @@ try {
             throw 'GitHub release asset upload failed.'
         }
 
-        $editFlags = if ($isPrerelease) { @('--prerelease', '--latest=false') } else { @('--latest') }
-        & $GhCommand release edit $Tag --title "AppControl Manager $Version" @editFlags
+        if ($isPrerelease) {
+            & $GhCommand release edit $Tag --title "AppControl Manager $Version" --prerelease --latest=false
+        }
+        else {
+            & $GhCommand release edit $Tag --title "AppControl Manager $Version" --latest
+        }
         if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release update failed.'
         }
     }
     elseif ($probeExitCode -eq 1) {
-        $createFlags = if ($isPrerelease) { @('--prerelease') } else { @() }
-        & $GhCommand release create $Tag @assets --title "AppControl Manager $Version" --generate-notes --verify-tag @createFlags
+        if ($isPrerelease) {
+            & $GhCommand release create $Tag --title "AppControl Manager $Version" --generate-notes --verify-tag --prerelease @assets
+        }
+        else {
+            & $GhCommand release create $Tag --title "AppControl Manager $Version" --generate-notes --verify-tag @assets
+        }
         if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release creation failed.'
         }

@@ -32,6 +32,17 @@ exit /b 0
     }
 
     Remove-Item -LiteralPath $calls -Force
+    $env:PROBE_EXIT = '1'
+    & $publisher -Tag 'v1.0.0-rc.1' -Version '1.0.0-rc.1' -AssetsDirectory $assets -GhCommand $fakeGh
+    $rcCreate = Get-Content -LiteralPath $calls | Where-Object { $_ -like 'release create*' } | Select-Object -Last 1
+    if ($rcCreate -notlike 'release create v1.0.0-rc.1*') {
+        throw 'Missing RC release creation invocation.'
+    }
+    if ($rcCreate -notmatch '(?:^|\s)--prerelease(?:\s|$)') {
+        throw "RC release creation did not pass --prerelease as one argument: $rcCreate"
+    }
+
+    Remove-Item -LiteralPath $calls -Force
     $env:PROBE_EXIT = '2'
     $threw = $false
     try {
