@@ -88,27 +88,32 @@ public sealed class InstallationModeManager
 
     public async Task RetryPendingReportAsync(CancellationToken ct)
     {
-        var state = _store.Read();
-        if (string.IsNullOrWhiteSpace(state.PendingReportStatus) || state.InstallationId <= 0) return;
-        if (!state.Active && IsNonTerminalReport(state.PendingReportStatus))
-        {
-            _log.Write($"installation report discarded stale status={state.PendingReportStatus} id={state.InstallationId}");
-            ClearPendingReport(state);
-            _store.Write(state);
-            return;
-        }
+        await _gate.WaitAsync(ct);
         try
         {
-            await _api.ReportInstallationAsync(state.InstallationId, new InstallationReportRequest
+            var state = _store.Read();
+            if (string.IsNullOrWhiteSpace(state.PendingReportStatus) || state.InstallationId <= 0) return;
+            if (!state.Active && IsNonTerminalReport(state.PendingReportStatus))
             {
-                Status = state.PendingReportStatus!, Detail = state.PendingReportDetail,
-                StartedAt = state.PendingReportStartedAt, EndsAt = state.PendingReportEndsAt,
-                CompletedAt = state.PendingReportCompletedAt
-            }, ct);
-            ClearPendingReport(state);
-            _store.Write(state);
+                _log.Write($"installation report discarded stale status={state.PendingReportStatus} id={state.InstallationId}");
+                ClearPendingReport(state);
+                _store.Write(state);
+                return;
+            }
+            try
+            {
+                await _api.ReportInstallationAsync(state.InstallationId, new InstallationReportRequest
+                {
+                    Status = state.PendingReportStatus!, Detail = state.PendingReportDetail,
+                    StartedAt = state.PendingReportStartedAt, EndsAt = state.PendingReportEndsAt,
+                    CompletedAt = state.PendingReportCompletedAt
+                }, ct);
+                ClearPendingReport(state);
+                _store.Write(state);
+            }
+            catch (Exception ex) { _log.Write("installation report retry: " + ex.Message); }
         }
-        catch (Exception ex) { _log.Write("installation report retry: " + ex.Message); }
+        finally { _gate.Release(); }
     }
 
     private async Task ReportOrQueueAsync(InstallationModeState state, string status, string detail, string? completedAt, CancellationToken ct)

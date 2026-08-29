@@ -177,6 +177,8 @@ class Release0172InstallationLearningTests(unittest.TestCase):
         retry = manager[manager.index("RetryPendingReportAsync"):report_start]
         report = manager[report_start:]
 
+        self.assertIn("await _gate.WaitAsync(ct);", retry)
+        self.assertIn("finally { _gate.Release(); }", retry)
         self.assertIn("!state.Active && IsNonTerminalReport(state.PendingReportStatus)", retry)
         self.assertIn("ClearPendingReport(state);", retry)
         self.assertIn("ClearPendingReport(state);", report)
