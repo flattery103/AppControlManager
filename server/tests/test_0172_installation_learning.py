@@ -155,7 +155,7 @@ class Release0172InstallationLearningTests(unittest.TestCase):
         self.assertIn("InstallationLearningReconciler.Create", finalizer)
         self.assertIn("new InstallationLearnedFile(x.FilePath, x.RecordId)", finalizer)
         self.assertIn("SkippedCount = plan.SkippedCount", finalizer)
-        self.assertIn("if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }", store)
+        self.assertIn("if (!File.Exists(representativePath)) { stats.Unpreparable++; continue; }", store)
         self.assertLess(finalizer.index("if (ready.Length > 0)"), finalizer.index("ForceEnforcementCoreAsync"))
         self.assertIn("public sealed class InstallationFinalizationResult", models)
         self.assertIn('"completed_with_warnings"', manager)

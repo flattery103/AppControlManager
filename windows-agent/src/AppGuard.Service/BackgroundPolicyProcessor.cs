@@ -37,6 +37,11 @@ public sealed class BackgroundPolicyProcessor
                 _store.MarkRuleReady(rule.CacheKey, result.FragmentXmlPath, rule.MinimumFileVersion);
                 _log.Write($"background-rule ready key={rule.CacheKey} kind={rule.Kind} elapsed={result.ElapsedSeconds:F1}s");
             }
+            catch (FileNotFoundException ex)
+            {
+                _store.MarkRuleExpired(rule.CacheKey, "Representative expired before it could be preserved.");
+                _log.Write($"background-rule expired key={rule.CacheKey}: {ex.Message}");
+            }
             catch (Exception ex)
             {
                 _store.MarkRuleFailed(rule.CacheKey, ex.Message);

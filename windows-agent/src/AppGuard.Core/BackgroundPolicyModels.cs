@@ -9,6 +9,7 @@ public static class BackgroundPolicyStatuses
     public const string Ready = "ready";
     public const string Installed = "installed";
     public const string Superseded = "superseded";
+    public const string Expired = "expired";
     public const string Failed = "failed";
 }
 

@@ -18,6 +18,7 @@ if (ruleWorkerMode)
 Directory.CreateDirectory(AppGuardPaths.ProgramDataRoot);
 Directory.CreateDirectory(AppGuardPaths.PolicyDirectory);
 Directory.CreateDirectory(AppGuardPaths.BlockCacheDirectory);
+Directory.CreateDirectory(AppGuardPaths.LearningCacheDirectory);
 Directory.CreateDirectory(AppGuardPaths.UpdateDirectory);
 
 string? ruleWorkerProvisioningError = null;
@@ -29,6 +30,7 @@ builder.Services.AddSingleton<JsonFileStore>();
 builder.Services.AddSingleton<FileLogger>();
 builder.Services.AddSingleton<ApiClient>();
 builder.Services.AddSingleton<EventCollector>();
+builder.Services.AddSingleton<LearningFileCache>();
 builder.Services.AddSingleton<PolicyProgressTracker>();
 builder.Services.AddSingleton<BackgroundPolicyStore>();
 builder.Services.AddSingleton<RuleWorkerClient>();
@@ -40,6 +42,7 @@ builder.Services.AddSingleton<AgentUpdater>();
 builder.Services.AddSingleton<BlockedFileCache>();
 builder.Services.AddSingleton<LocalRequestServer>();
 builder.Services.AddHostedService<AgentWorker>();
+builder.Services.AddHostedService<LearningEventWatcher>();
 var host = builder.Build();
 if (!string.IsNullOrWhiteSpace(ruleWorkerProvisioningError))
     host.Services.GetRequiredService<FileLogger>().Write("rule-worker provisioning failed: " + ruleWorkerProvisioningError);

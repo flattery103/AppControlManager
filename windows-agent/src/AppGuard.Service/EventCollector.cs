@@ -18,35 +18,36 @@ public sealed class EventCollector
         {
             using (record)
             {
-                var data = ParseData(record.ToXml());
-                data.TryGetValue("File Name", out var rawPath);
-                if (string.IsNullOrWhiteSpace(rawPath)) data.TryGetValue("FileName", out rawPath);
-                data.TryGetValue("Process Name", out var rawParent);
-                if (string.IsNullOrWhiteSpace(rawParent)) data.TryGetValue("ProcessName", out rawParent);
-                var path = DevicePathResolver.Resolve(rawPath);
-                var parent = DevicePathResolver.Resolve(rawParent);
-                var meta = !string.IsNullOrWhiteSpace(path) ? FileMetadataReader.Read(path) : null;
-                results.Add(new EventUpload
-                {
-                    EventId = record.Id,
-                    RecordId = record.RecordId,
-                    OccurredAt = record.TimeCreated?.ToUniversalTime().ToString("O"),
-                    FilePath = path,
-                    ParentPath = parent,
-                    Sha256 = meta?.Sha256,
-                    Publisher = meta?.Publisher,
-                    ProductName = meta?.ProductName,
-                    FileVersion = meta?.FileVersion,
-                    Raw = new Dictionary<string,string?>
-                    {
-                        ["policy_id"] = First(data, "Policy ID", "PolicyID"),
-                        ["policy_name"] = First(data, "Policy Name", "PolicyName"),
-                        ["requested_signing_level"] = First(data, "Requested Signing Level", "RequestedSigningLevel")
-                    }
-                });
+                results.Add(FromRecord(record));
             }
         }
         return results.OrderBy(x => x.RecordId).ToList();
+    }
+
+    public static EventUpload FromRecord(EventRecord record)
+    {
+        var data = ParseData(record.ToXml());
+        var path = DevicePathResolver.Resolve(First(data, "File Name", "FileName"));
+        var parent = DevicePathResolver.Resolve(First(data, "Process Name", "ProcessName"));
+        var meta = !string.IsNullOrWhiteSpace(path) ? FileMetadataReader.Read(path) : null;
+        return new EventUpload
+        {
+            EventId = record.Id,
+            RecordId = record.RecordId,
+            OccurredAt = record.TimeCreated?.ToUniversalTime().ToString("O"),
+            FilePath = path,
+            ParentPath = parent,
+            Sha256 = meta?.Sha256,
+            Publisher = meta?.Publisher,
+            ProductName = meta?.ProductName,
+            FileVersion = meta?.FileVersion,
+            Raw = new Dictionary<string,string?>
+            {
+                ["policy_id"] = First(data, "Policy ID", "PolicyID"),
+                ["policy_name"] = First(data, "Policy Name", "PolicyName"),
+                ["requested_signing_level"] = First(data, "Requested Signing Level", "RequestedSigningLevel")
+            }
+        };
     }
 
     public static string? LatestBlockedFile()

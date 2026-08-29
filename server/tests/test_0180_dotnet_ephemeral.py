@@ -30,7 +30,7 @@ class Release0180DotNetEphemeralTests(unittest.TestCase):
         store = self.text("windows-agent/src/AppGuard.Service/BackgroundPolicyStore.cs")
         method = store[store.index("PrepareLearningEvents"):store.index("private static void CountQueueDisposition")]
         ignored = method.index("LearnedPathClassifier.IsExpectedDotNetExtraction")
-        missing = method.index("!File.Exists(filePath)")
+        missing = method.index("!File.Exists(representativePath)")
         self.assertLess(ignored, missing)
         self.assertIn("stats.IgnoredEphemeral++", method)
         self.assertIn("IgnoredEphemeral", self.text("windows-agent/src/AppGuard.Core/BackgroundPolicyModels.cs"))

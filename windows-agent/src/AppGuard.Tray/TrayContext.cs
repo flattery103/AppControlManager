@@ -28,9 +28,11 @@ public sealed class TrayContext : ApplicationContext
     private bool _haveStatusSnapshot;
     private bool _refreshingRequests;
     private readonly Dictionary<string, DateTimeOffset> _recentNotices = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _recentBlocks = new(StringComparer.OrdinalIgnoreCase);
     private Action? _balloonClickAction;
 
-    private static readonly TimeSpan SessionLifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SessionLifetime = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan BlockDedupe = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan NoticeDedupe = TimeSpan.FromSeconds(15);
 
     public TrayContext(SynchronizationContext ui)
@@ -251,6 +253,10 @@ public sealed class TrayContext : ApplicationContext
             return;
         }
 
+        // Suppress only duplicate UI. The file remains blocked and each Code Integrity event
+        // is still uploaded by the service for central telemetry.
+        if (IsRepeatedBlock(snapshot)) return;
+
         // If this component is already part of a Pending/Approving request, do not let the user
         // create another request. Reopen the existing request status instead.
         if (activeRequest is not null)
@@ -281,7 +287,7 @@ public sealed class TrayContext : ApplicationContext
                       && !_activeSessionForm.IsDisposed
                       && !_activeSessionForm.IsSubmitted
                       && now - _activeSessionForm.StartedAt <= SessionLifetime
-                      && now - _activeSessionForm.LastActivityAt <= TimeSpan.FromSeconds(8);
+                      && now - _activeSessionForm.LastActivityAt <= TimeSpan.FromSeconds(30);
 
         if (!canJoin)
         {
@@ -294,6 +300,19 @@ public sealed class TrayContext : ApplicationContext
         _activeSessionForm.SetCollecting(true);
         _sessionQuietTimer.Stop();
         _sessionQuietTimer.Start();
+    }
+
+    private bool IsRepeatedBlock(BlockedSnapshot snapshot)
+    {
+        var identity = !string.IsNullOrWhiteSpace(snapshot.Sha256)
+            ? "sha256|" + snapshot.Sha256
+            : "path|" + snapshot.OriginalPath;
+        var now = DateTimeOffset.Now;
+        var repeated = _recentBlocks.TryGetValue(identity, out var last) && now - last < BlockDedupe;
+        _recentBlocks[identity] = now;
+        foreach (var stale in _recentBlocks.Where(x => now - x.Value > BlockDedupe).Select(x => x.Key).ToArray())
+            _recentBlocks.Remove(stale);
+        return repeated;
     }
 
     private SessionRequestForm CreateSessionForm()

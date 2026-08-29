@@ -1,0 +1,17 @@
+AppControl Manager 0.18.1
+
+Learning noise cleanup
+
+- Watch Code Integrity audit event 3076 continuously and preserve short-lived rule inputs in a bounded protected ProgramData cache.
+- Prefer the live observed file and fall back to its preserved copy for safe FilePublisher/product or exact SHA-256 rule generation.
+- Mark unavailable representatives as neutral `expired` work instead of retrying them into production failures.
+- Migrate the exact 0.18.0 missing-representative failure to `expired` while retaining real worker, ConfigCI, validation, and installation failures.
+- Deduplicate repeated block prompts for the same identity for two minutes and keep related components in one longer request session.
+- Continue uploading all events even when duplicate endpoint UI is suppressed.
+- Do not authorize TEMP paths, execute cached files, or weaken WDAC writable-path protection.
+
+Upgrade validation
+
+- Upgrade one endpoint automatically from 0.18.0 to 0.18.1.
+- Run an extended Learning period and confirm normal disappearing TEMP inputs do not increase Background Policy Work failures.
+- Return to Enforcement and confirm unknown TEMP malware samples remain blocked while learned signed applications run without repeated prompts.

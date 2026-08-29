@@ -10,6 +10,7 @@ public static class AppGuardPaths
     public static string BasePolicyXml => Path.Combine(PolicyDirectory, "BasePolicy.xml");
     public static string ServiceLog => Path.Combine(ProgramDataRoot, "agent-service.log");
     public static string BlockCacheDirectory => Path.Combine(ProgramDataRoot, "BlockedCache");
+    public static string LearningCacheDirectory => Path.Combine(ProgramDataRoot, "LearningCache");
     public static string ScriptsDirectory => Path.Combine(ProgramFilesRoot, "Scripts");
     public static string UpdateDirectory => Path.Combine(ProgramDataRoot, "Updates");
     public static string UpdateStatusPath => Path.Combine(UpdateDirectory, "update-status.json");

@@ -5,6 +5,6 @@
     <Nullable>enable</Nullable>
     <AssemblyName>AppGuard.Core</AssemblyName>
     <RootNamespace>AppGuard.Core</RootNamespace>
-    <Version>0.18.0</Version>
+    <Version>0.18.1</Version>
   </PropertyGroup>
 </Project>

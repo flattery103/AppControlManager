@@ -1,4 +1,10 @@
-# AppControl Manager 0.18.0
+# AppControl Manager 0.18.1
+
+## 0.18.1 Learning Noise Cleanup
+
+Version 0.18.1 preserves Code Integrity audit inputs immediately so short-lived installer files can still produce safe FilePublisher or hash rules after their original TEMP path disappears. Missing representatives that cannot be preserved now become neutral `expired` work instead of permanent production failures, including migration of the exact legacy 0.18.0 error.
+
+Enforcement remains fail-closed: AppControl Manager does not add TEMP wildcard authorization or weaken WDAC writable-path protection. Unknown and unsigned transient executables remain blocked. The tray only deduplicates repeated UI for the same blocked identity and groups related components for longer; all Code Integrity events continue to reach central telemetry.
 
 ## 0.18.0 Consolidated Reliability Release
 
@@ -65,7 +71,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.0`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.1`:
 
 ```text
 AZURE_CLIENT_ID

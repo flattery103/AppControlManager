@@ -7,12 +7,15 @@ namespace AppGuard.Service;
 public sealed class BackgroundPolicyStore
 {
     private const string MutexName = @"Global\AppControlManager.BackgroundPolicyState";
+    private const string LegacyMissingRepresentativeError = "Background rule representative file is no longer available.";
     private readonly FileLogger _log;
+    private readonly LearningFileCache _learningCache;
     private readonly JsonSerializerOptions _json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
-    public BackgroundPolicyStore(FileLogger log)
+    public BackgroundPolicyStore(FileLogger log, LearningFileCache learningCache)
     {
         _log = log;
+        _learningCache = learningCache;
         Directory.CreateDirectory(AppGuardPaths.ProgramDataRoot);
         Directory.CreateDirectory(AppGuardPaths.RuleFragmentDirectory);
         Mutate(snapshot =>
@@ -31,6 +34,15 @@ public sealed class BackgroundPolicyStore
                 bundle.LastError = "Recovered after agent restart while processing.";
                 bundle.UpdatedAt = Now();
             }
+            foreach (var rule in snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Failed
+                && (x.LastError ?? string.Empty).StartsWith(LegacyMissingRepresentativeError, StringComparison.Ordinal)))
+            {
+                rule.Status = BackgroundPolicyStatuses.Expired;
+                rule.LastError = "Representative expired before it could be preserved.";
+                rule.UpdatedAt = Now();
+            }
+            foreach (var rule in snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Expired))
+                ExpireDependentBundles(snapshot, rule.CacheKey);
             return 0;
         });
     }
@@ -158,6 +170,17 @@ public sealed class BackgroundPolicyStore
             return 0;
         });
 
+    public void MarkRuleExpired(string cacheKey, string detail)
+        => Mutate(snapshot =>
+        {
+            var entry = RequireRule(snapshot, cacheKey);
+            entry.Status = BackgroundPolicyStatuses.Expired;
+            entry.LastError = detail;
+            entry.UpdatedAt = Now();
+            ExpireDependentBundles(snapshot, cacheKey);
+            return 0;
+        });
+
     public BackgroundBundleJob? ClaimReadyBundle()
         => Mutate(snapshot =>
         {
@@ -255,24 +278,26 @@ public sealed class BackgroundPolicyStore
             var filePath = (item.FilePath ?? string.Empty).Trim();
             if (filePath.Length == 0) { stats.Unpreparable++; continue; }
             if (LearnedPathClassifier.IsExpectedDotNetExtraction(filePath)) { stats.IgnoredEphemeral++; continue; }
-            if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }
+            var representativePath = _learningCache.Resolve(item.RecordId, filePath) ?? string.Empty;
+            if (!File.Exists(representativePath)) { stats.Unpreparable++; continue; }
+            var preservedMeta = FileMetadataReader.Read(representativePath);
             RuleCacheEntry? prepared = null;
-            var publisher = (item.Publisher ?? string.Empty).Trim();
-            var product = (item.ProductName ?? string.Empty).Trim();
-            var version = (item.FileVersion ?? string.Empty).Trim();
+            var publisher = (item.Publisher ?? preservedMeta.Publisher ?? string.Empty).Trim();
+            var product = (item.ProductName ?? preservedMeta.ProductName ?? string.Empty).Trim();
+            var version = (item.FileVersion ?? preservedMeta.FileVersion ?? string.Empty).Trim();
             if (publisher.Length > 0 && IsSafeProductName(product) && Version.TryParse(version, out _))
             {
                 var key = $"product|{Normalize(publisher)}|{Normalize(product)}";
                 var before = Snapshot().Rules.FirstOrDefault(x => string.Equals(x.CacheKey, key, StringComparison.OrdinalIgnoreCase));
-                prepared = UpsertProductCandidate(null, "learning", publisher, product, version, filePath);
+                prepared = UpsertProductCandidate(null, "learning", publisher, product, version, representativePath);
                 stats.ProductCandidates++;
                 CountQueueDisposition(before, prepared, stats);
             }
-            else if (!string.IsNullOrWhiteSpace(item.Sha256))
+            else if (!string.IsNullOrWhiteSpace(item.Sha256 ?? preservedMeta.Sha256))
             {
-                var hash = item.Sha256.Trim().ToUpperInvariant();
+                var hash = (item.Sha256 ?? preservedMeta.Sha256)!.Trim().ToUpperInvariant();
                 var before = Snapshot().Rules.FirstOrDefault(x => string.Equals(x.CacheKey, $"hash|{hash}", StringComparison.OrdinalIgnoreCase));
-                prepared = UpsertHashCandidate(null, "learning", hash, filePath);
+                prepared = UpsertHashCandidate(null, "learning", hash, representativePath);
                 stats.HashCandidates++;
                 CountQueueDisposition(before, prepared, stats);
             }
@@ -344,6 +369,16 @@ public sealed class BackgroundPolicyStore
         => snapshot.Rules.FirstOrDefault(x => string.Equals(x.CacheKey, key, StringComparison.OrdinalIgnoreCase)) ?? throw new KeyNotFoundException("Background policy rule not found: " + key);
     private static BackgroundBundleJob RequireBundle(BackgroundPolicySnapshot snapshot, long requestId)
         => snapshot.Bundles.FirstOrDefault(x => x.RequestId == requestId) ?? throw new KeyNotFoundException("Background policy bundle not found: " + requestId);
+    private static void ExpireDependentBundles(BackgroundPolicySnapshot snapshot, string ruleKey)
+    {
+        foreach (var bundle in snapshot.Bundles.Where(x => x.Status == BackgroundPolicyStatuses.Queued
+            && x.RequiredRuleKeys.Contains(ruleKey, StringComparer.OrdinalIgnoreCase)))
+        {
+            bundle.Status = BackgroundPolicyStatuses.Expired;
+            bundle.LastError = "A transient learning input expired before it could be preserved.";
+            bundle.UpdatedAt = Now();
+        }
+    }
     private static string Normalize(string value) => string.Join(" ", (value ?? "").Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
     private static bool IsLowerVersion(string? candidate, string? current) { if (!Version.TryParse(candidate, out var c)) return false; if (!Version.TryParse(current, out var e)) return true; return c < e; }
     private static void AddOwner(List<string> owners, long? requestId, string ownerType) { var owner = requestId.HasValue ? $"{ownerType}:{requestId.Value}" : ownerType; if (!owners.Contains(owner, StringComparer.OrdinalIgnoreCase)) owners.Add(owner); }
