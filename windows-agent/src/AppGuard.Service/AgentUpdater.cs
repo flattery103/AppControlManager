@@ -85,7 +85,7 @@ public sealed class AgentUpdater
             WriteStatus(new UpdateStatusFile { status = "staging", target_version = targetVersion, from_version = currentVersion, result = "Pre-authorizing the replacement service and tray binaries with Windows App Control...", staged_path = staging, previous_preauth_policy_id = previousPolicy, updated_at = DateTimeOffset.UtcNow.ToString("O") });
             var service = Path.Combine(staging, "Service", "AppControlManager.Service.exe");
             var tray = Path.Combine(staging, "Tray", "AppControlManager.Tray.exe");
-            var policy = await _policies.ApproveFilesAsync([service, tray], -commandId, ct);
+            var policy = await _policies.PreauthorizeAgentUpdateAsync([service, tray], -commandId, ct);
             newPolicy = policy.PolicyId;
             _log.Write($"agent-update preauthorized target={targetVersion} policy={newPolicy}");
         }

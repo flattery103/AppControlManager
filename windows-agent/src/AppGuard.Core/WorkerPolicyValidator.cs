@@ -11,7 +11,10 @@ public static class WorkerPolicyValidator
         "Enabled:UMCI",
         "Enabled:Audit Mode",
         "Enabled:Unsigned System Integrity Policy",
-        "Enabled:Advanced Boot Options Menu"
+        "Enabled:Advanced Boot Options Menu",
+        // ConfigCI adds this restrictive host option on current Windows builds. It does
+        // not grant file execution and is safe to retain in generation-only output.
+        "Required:Enforce Store Applications"
     };
 
     public static string ValidateAndNormalizeFile(

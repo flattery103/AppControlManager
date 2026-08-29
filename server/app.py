@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="0.18.1")
+app = FastAPI(title="AppControl Manager Server", version="0.18.2")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -1148,6 +1148,15 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
         return
     if previous_desired==desired and (device['update_status'] or '').lower() in {'failed','rolled_back'}:
         return
+    latest_release_failure=conn.execute(
+        "SELECT id FROM agent_update_history WHERE device_id=? AND release_id=? AND status IN ('failed','rolled_back') ORDER BY id DESC LIMIT 1",
+        (device_id,release['id'])
+    ).fetchone()
+    if latest_release_failure:
+        # Heartbeats can continue to report the local staging file after a failed command.
+        # The immutable release history is the retry latch, preventing an endless loop.
+        conn.execute("UPDATE devices SET update_status='failed',update_result=? WHERE id=?",(f'Agent {desired} failed; administrator intervention or a newer release is required.',device_id))
+        return
     if not version_at_least(current,SELF_UPDATE_MIN_VERSION):
         conn.execute("UPDATE devices SET update_status='bootstrap_required',update_result=? WHERE id=?",(f'Manually install {SELF_UPDATE_MIN_VERSION} or later once to enable managed self-update.',device_id))
         return
@@ -1521,7 +1530,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 0.18.1</div></aside>"
+        + "</div><div class='side-footer'>Server 0.18.2</div></aside>"
     )
 
 
@@ -1919,7 +1928,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.18.1"}
+    return {"ok": True, "version": "0.18.2"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)

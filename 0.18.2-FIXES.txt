@@ -1,0 +1,11 @@
+AppControl Manager 0.18.2 - Automatic Update and Rule Worker Reliability
+
+- Publishes Rule Worker request.json only after the staged input and request permissions are complete.
+- Keeps result-publication and per-job failures from terminating the Rule Worker service loop.
+- Replaces the blind 35-minute wait with a five-minute bound and active Rule Worker liveness checks.
+- Accepts the known restrictive ConfigCI Required:Enforce Store Applications option without weakening policy validation.
+- Preauthorizes exact hash rules for both replacement agent executables before automatic update activation.
+- Uses durable failed release history as the automatic-update retry latch, preventing staging/queue loops.
+- Retains the legitimate background failure until an administrator retries it after installing this repair.
+
+The installed 0.18.1 updater cannot repair its own preauthorization path, so the test endpoint needs one final manual 0.18.2 upgrade. Prove automatic update with the next signed test release before expanding deployment.

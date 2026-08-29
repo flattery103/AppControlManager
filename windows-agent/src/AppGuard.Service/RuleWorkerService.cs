@@ -32,13 +32,32 @@ internal sealed class RuleWorkerService : BackgroundService
                     var requestPath = Path.Combine(jobDirectory, "request.json");
                     var resultPath = Path.Combine(jobDirectory, "result.json");
                     if (!File.Exists(requestPath) || File.Exists(resultPath)) continue;
-                    await ProcessJobAsync(jobDirectory, requestPath, resultPath, stoppingToken);
+                    await ProcessJobSafelyAsync(jobDirectory, requestPath, resultPath, stoppingToken);
                 }
                 await Task.Delay(TimeSpan.FromMilliseconds(250), stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         finally { WriteLog("rule-worker stop"); }
+    }
+
+    private static async Task ProcessJobSafelyAsync(string jobDirectory, string requestPath, string resultPath, CancellationToken ct)
+    {
+        try { await ProcessJobAsync(jobDirectory, requestPath, resultPath, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            WriteLog($"job result publication failed dir={Path.GetFileName(jobDirectory)} error={SanitizeError(ex.Message, jobDirectory, 2000)}");
+            try
+            {
+                var failed = new RuleWorkerResult { Success = false, Error = SanitizeError(ex.Message, jobDirectory, 8000) };
+                await WriteJsonAtomicAsync(resultPath, failed, ct);
+            }
+            catch (Exception resultEx)
+            {
+                WriteLog($"job failure result unavailable dir={Path.GetFileName(jobDirectory)} error={SanitizeError(resultEx.Message, jobDirectory, 2000)}");
+            }
+        }
     }
 
     private static void CleanupStaleJobs()

@@ -36,6 +36,52 @@ public sealed class PolicyHelper
     public Task<SupplementalResult> ApproveFilesAsync(IReadOnlyList<string> filePaths, long requestId, CancellationToken ct)
         => ApproveFilesAsync(filePaths, requestId, null, ct);
 
+    public async Task<SupplementalResult> PreauthorizeAgentUpdateAsync(IReadOnlyList<string> filePaths, long requestId, CancellationToken ct)
+    {
+        var files = filePaths.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (files.Length != filePaths.Count || files.Length == 0)
+            throw new FileNotFoundException("One or more replacement agent binaries are unavailable for update preauthorization.");
+
+        Interlocked.Increment(ref _foregroundWaiters);
+        try
+        {
+            await _policyGenerationGate.WaitAsync(ct);
+            try
+            {
+                Directory.CreateDirectory(AppGuardPaths.RuleFragmentDirectory);
+                var fragments = new List<string>();
+                foreach (var file in files)
+                {
+                    var fragment = Path.Combine(AppGuardPaths.RuleFragmentDirectory, $"Update-{Guid.NewGuid():N}.xml");
+                    _log.Write($"agent-update hash preauthorization start request={requestId} file={file}");
+                    await _ruleWorker.GenerateAsync("hash", file, fragment, ct);
+                    fragments.Add(fragment);
+                }
+
+                var listPath = Path.Combine(Path.GetTempPath(), $"AppControlManager-UpdateFragments-{Guid.NewGuid():N}.json");
+                try
+                {
+                    await File.WriteAllTextAsync(listPath, JsonSerializer.Serialize(fragments), new UTF8Encoding(false), ct);
+                    var script = Path.Combine(AppGuardPaths.ScriptsDirectory, "Install-MergedSupplemental.ps1");
+                    var args = $"-FragmentListPath {Quote(listPath)} -Name {Quote("AppControl Manager Update " + Math.Abs(requestId))} -Json";
+                    var output = await RunPowerShellAsync(script, args, ct);
+                    var line = output.Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault(x => x.TrimStart().StartsWith("{"));
+                    if (line is null) throw new InvalidOperationException("Update preauthorization helper did not return JSON. Output: " + output);
+                    var result = JsonSerializer.Deserialize<SupplementalResult>(line, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                                 ?? throw new InvalidOperationException("Could not parse update preauthorization result.");
+                    result.RequestedFiles = files.Length;
+                    result.PolicyFiles = files.Length;
+                    result.PrimaryRuleMode = "hash";
+                    _log.Write($"agent-update hash preauthorization finished request={requestId} files={files.Length} policy={result.PolicyId}");
+                    return result;
+                }
+                finally { try { File.Delete(listPath); } catch { } }
+            }
+            finally { _policyGenerationGate.Release(); }
+        }
+        finally { Interlocked.Decrement(ref _foregroundWaiters); }
+    }
+
     public async Task<SupplementalResult> ApproveFilesAsync(IReadOnlyList<string> filePaths, long requestId, long? scopedPolicyId, CancellationToken ct)
     {
         var requested = filePaths.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

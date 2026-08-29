@@ -1,4 +1,10 @@
-# AppControl Manager 0.18.1
+# AppControl Manager 0.18.2
+
+## 0.18.2 Automatic Update and Rule Worker Reliability
+
+Version 0.18.2 fixes the Rule Worker publication race observed during the 0.18.0 to 0.18.1 managed update, keeps an individual job failure from stopping the worker service, and replaces the 35-minute blind wait with bounded liveness checks. Managed updates preauthorize exact hash rules for both replacement executables before activation, avoiding unsafe assumptions about publisher coverage. The server also latches a failed release attempt in update history so staging heartbeats cannot trigger an endless automatic retry loop.
+
+The test endpoint requires one final manual upgrade from 0.18.1 because its installed updater contains the defect being repaired. After 0.18.2 is installed, automatic update behavior must be proven with the next signed test release before broader deployment.
 
 ## 0.18.1 Learning Noise Cleanup
 
@@ -71,7 +77,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.1`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.2`:
 
 ```text
 AZURE_CLIENT_ID

@@ -7,6 +7,7 @@ namespace AppGuard.Service;
 
 public sealed class RuleWorkerClient
 {
+    private static readonly TimeSpan WorkerResultTimeout = TimeSpan.FromMinutes(5);
     private readonly FileLogger _log;
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -42,6 +43,7 @@ public sealed class RuleWorkerClient
         var inputFileName = "input" + extension;
         var stagedInput = Path.Combine(jobDirectory, inputFileName);
         var requestPath = Path.Combine(jobDirectory, "request.json");
+        var unpublishedRequestPath = Path.Combine(jobDirectory, "request.pending.json");
         var resultPath = Path.Combine(jobDirectory, "result.json");
         var workerOutput = Path.GetFullPath(Path.Combine(jobDirectory, workerOutputFileName));
         var jobRoot = Path.GetFullPath(jobDirectory) + Path.DirectorySeparatorChar;
@@ -49,7 +51,8 @@ public sealed class RuleWorkerClient
             throw new InvalidOperationException("Fixed rule-worker output escaped the job directory.");
         var consumed = false;
         var publishedToWorker = false;
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(35);
+        var deadline = DateTimeOffset.UtcNow.Add(WorkerResultTimeout);
+        var nextLivenessCheck = DateTimeOffset.MinValue;
 
         try
         {
@@ -57,17 +60,25 @@ public sealed class RuleWorkerClient
             RejectReparsePoint(stagedInput, "staged input");
             var expectedIdentity = WorkerPolicyInputIdentity.FromFile(stagedInput);
             var request = new RuleWorkerRequest { JobId = jobId, Operation = operation, InputFileName = inputFileName };
-            await WriteJsonAtomicAsync(requestPath, request, ct);
+            await WriteJsonAtomicAsync(unpublishedRequestPath, request, ct);
+            RejectReparsePoint(unpublishedRequestPath, "unpublished request");
+            RuleWorkerProvisioner.GrantJobAccess(jobDirectory, stagedInput, unpublishedRequestPath);
+            File.Move(unpublishedRequestPath, requestPath, false);
             RejectReparsePoint(requestPath, "request");
-            RuleWorkerProvisioner.GrantJobAccess(jobDirectory, stagedInput, requestPath);
             publishedToWorker = true;
+            RuleWorkerProvisioner.EnsureRunning();
             _log.Write($"rule-worker queued id={jobId} operation={request.Operation} source={sourcePath}");
 
             while (!File.Exists(resultPath))
             {
                 ct.ThrowIfCancellationRequested();
                 if (DateTimeOffset.UtcNow >= deadline)
-                    throw new TimeoutException("Rule worker did not return a result within 35 minutes.");
+                    throw new TimeoutException("Rule worker did not return a result within 5 minutes.");
+                if (DateTimeOffset.UtcNow >= nextLivenessCheck)
+                {
+                    RuleWorkerProvisioner.EnsureRunning();
+                    nextLivenessCheck = DateTimeOffset.UtcNow.AddSeconds(5);
+                }
                 await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
             }
 

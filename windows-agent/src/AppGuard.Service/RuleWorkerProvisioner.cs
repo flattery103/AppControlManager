@@ -48,6 +48,19 @@ internal static class RuleWorkerProvisioner
         }
     }
 
+    internal static void EnsureRunning()
+    {
+        var state = Run("sc.exe", "query", ServiceName);
+        if (state.ExitCode != 0)
+            throw new InvalidOperationException($"Rule Worker service is unavailable: {state.Stderr} {state.Stdout}".Trim());
+        if (state.Stdout.Contains("RUNNING", StringComparison.OrdinalIgnoreCase)) return;
+        var start = Run("sc.exe", "start", ServiceName);
+        if (start.ExitCode != 0 &&
+            !start.Stdout.Contains("1056", StringComparison.OrdinalIgnoreCase) &&
+            !start.Stderr.Contains("1056", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Rule Worker service stopped and could not be restarted: {start.Stderr} {start.Stdout}".Trim());
+    }
+
     internal static void GrantJobAccess(string jobDirectory, string stagedInput, string requestPath)
     {
         var jobsRoot = Path.GetFullPath(AppGuardPaths.RuleWorkerJobsDirectory) + Path.DirectorySeparatorChar;
