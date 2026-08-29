@@ -1,4 +1,10 @@
-# AppControl Manager 0.18.2
+# AppControl Manager 0.18.3
+
+## 0.18.3 SHA-384 FilePublisher Validation
+
+Version 0.18.3 validates the SHA-384 TBS certificate-root identities emitted by ConfigCI for applications chained through Microsoft ID Verified Code Signing PCA 2021. The staged file's signer chain is independently hashed by LocalSystem, and a 96-character ConfigCI root is accepted only when it exactly matches that chain. SHA-1 and SHA-256 matching and unrelated-signer rejection remain unchanged.
+
+This repairs background FilePublisher preparation for applications such as Action1 and the signed AppControl Manager installer. It is also the managed automatic-update proof from the repaired 0.18.2 updater.
 
 ## 0.18.2 Automatic Update and Rule Worker Reliability
 
@@ -77,7 +83,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.2`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v0.18.3`:
 
 ```text
 AZURE_CLIENT_ID

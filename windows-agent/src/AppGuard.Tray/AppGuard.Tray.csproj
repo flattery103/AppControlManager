@@ -10,7 +10,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>AppControlManager.Tray</AssemblyName>
     <RootNamespace>AppGuard.Tray</RootNamespace>
-    <Version>0.18.2</Version>
+    <Version>0.18.3</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AppGuard.Core\AppGuard.Core.csproj" />

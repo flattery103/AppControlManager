@@ -1,0 +1,9 @@
+AppControl Manager 0.18.3 - SHA-384 FilePublisher Validation
+
+- Calculates SHA-384 TBS certificate digests for the staged executable's signing chain.
+- Accepts 96-character ConfigCI certificate-root values only when they exactly match that chain.
+- Retains exact SHA-1 and SHA-256 signer validation and rejection of unrelated signer roots.
+- Repairs FilePublisher background work for Microsoft ID Verified Code Signing PCA 2021 applications, including Action1 and the signed AppControl Manager installer.
+- Uses this signed release as the automatic-update proof from the repaired 0.18.2 updater.
+
+After 0.18.3 is installed, retry failed background policy work once. The existing Action1 and AppControl Manager installer rules should validate and leave the dashboard with no failed background work.

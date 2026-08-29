@@ -5,6 +5,7 @@ internal static class WorkerPolicyValidationBehavior
     private const string Sha1 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     private const string Sha256 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     private const string SignerRoot = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+    private const string SignerRootSha384 = "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE";
 
     private static readonly WorkerPolicyInputIdentity Expected = new(
         fileName: "Contoso.exe",
@@ -15,7 +16,7 @@ internal static class WorkerPolicyValidationBehavior
         contentSha256: Sha256,
         expectedPolicyHashes: new[] { Sha1, Sha256 },
         publisherNames: new[] { "Contoso Software" },
-        signerTbsHashes: new[] { SignerRoot });
+        signerTbsHashes: new[] { SignerRoot, SignerRootSha384 });
 
     public static void Run()
     {
@@ -25,6 +26,7 @@ internal static class WorkerPolicyValidationBehavior
         Accepts("exact hash identity", ExactHashPolicy, "primary_allow", "hash");
         RemovesUntrustedPageHashes();
         Accepts("exact ProductName and signer identity", ExactProductPolicy, "primary_allow", "product");
+        Accepts("exact SHA-384 ProductName signer identity", ExactSha384ProductPolicy, "product", "product");
         Accepts("exact FilePublisher file/version and signer identity", ExactFilePublisherPolicy, "primary_allow", "filepublisher");
         Accepts("exact deny hash identity", ExactDenyHashPolicy, "deny_policy", "hash");
         Rejects("mutation: allow operation accepts deny semantics", ExactDenyHashPolicy, "primary_allow");
@@ -141,6 +143,18 @@ internal static class WorkerPolicyValidationBehavior
           <Signers><Signer ID="ID_SIGNER_CONTOSO"><CertRoot Type="TBS" Value="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"/><CertPublisher Value="Contoso Software"/><FileAttribRef RuleID="ID_FILEATTRIB_PRODUCT"/></Signer></Signers>
           <SigningScenarios><SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_WINDOWS"><ProductSigners><AllowedSigners><AllowedSigner SignerId="ID_SIGNER_CONTOSO"/></AllowedSigners></ProductSigners></SigningScenario></SigningScenarios>
           <UpdatePolicySigners/><CiSigners><CiSigner SignerId="ID_SIGNER_CONTOSO"/></CiSigners><HvciOptions>0</HvciOptions>
+        </SiPolicy>
+        """;
+
+    private const string ExactSha384ProductPolicy = """
+        <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy" PolicyType="Base Policy">
+          <VersionEx>10.0.0.0</VersionEx><BasePolicyID>{55555555-5555-5555-5555-555555555555}</BasePolicyID><PolicyID>{55555555-5555-5555-5555-555555555555}</PolicyID>
+          <PlatformID>{2E07F7E4-194C-4D20-B7C9-6F44A6C5A234}</PlatformID>
+          <Rules><Rule><Option>Enabled:UMCI</Option></Rule><Rule><Option>Enabled:Audit Mode</Option></Rule><Rule><Option>Enabled:Unsigned System Integrity Policy</Option></Rule><Rule><Option>Enabled:Advanced Boot Options Menu</Option></Rule><Rule><Option>Required:Enforce Store Applications</Option></Rule></Rules>
+          <EKUs/><FileRules><FileAttrib ID="ID_FILEATTRIB_PRODUCT_SHA384" ProductName="Contoso App" MinimumFileVersion="1.2.3.4"/></FileRules>
+          <Signers><Signer ID="ID_SIGNER_SHA384"><CertRoot Type="TBS" Value="EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"/><CertPublisher Value="Contoso Software"/><FileAttribRef RuleID="ID_FILEATTRIB_PRODUCT_SHA384"/></Signer></Signers>
+          <SigningScenarios><SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_WINDOWS"><ProductSigners><AllowedSigners><AllowedSigner SignerId="ID_SIGNER_SHA384"/></AllowedSigners></ProductSigners></SigningScenario></SigningScenarios>
+          <UpdatePolicySigners/><CiSigners><CiSigner SignerId="ID_SIGNER_SHA384"/></CiSigners><HvciOptions>0</HvciOptions>
         </SiPolicy>
         """;
 

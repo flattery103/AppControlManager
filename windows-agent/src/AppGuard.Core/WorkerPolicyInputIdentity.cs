@@ -141,6 +141,7 @@ public sealed class WorkerPolicyInputIdentity
         var tbsCertificate = certificateSequence.ReadEncodedValue().Span;
         hashes.Add(Convert.ToHexString(SHA1.HashData(tbsCertificate)));
         hashes.Add(Convert.ToHexString(SHA256.HashData(tbsCertificate)));
+        hashes.Add(Convert.ToHexString(SHA384.HashData(tbsCertificate)));
     }
 
     private static string Required(string value, string parameterName)
@@ -160,8 +161,8 @@ public sealed class WorkerPolicyInputIdentity
         foreach (var value in values ?? throw new ArgumentNullException(parameterName))
         {
             var clean = Required(value, parameterName).ToUpperInvariant();
-            if (clean.Length is not (40 or 64) || clean.Any(c => !Uri.IsHexDigit(c)))
-                throw new ArgumentException("Digest set contains an invalid SHA-1/SHA-256 value.", parameterName);
+            if (clean.Length is not (40 or 64 or 96) || clean.Any(c => !Uri.IsHexDigit(c)))
+                throw new ArgumentException("Digest set contains an invalid SHA-1/SHA-256/SHA-384 value.", parameterName);
             set.Add(clean);
         }
         return set;
