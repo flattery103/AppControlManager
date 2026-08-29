@@ -810,7 +810,7 @@ def queue_scoped_auto_approval(conn: sqlite3.Connection, device_id: str, req, po
 ALLOWED_AGENT_COMMANDS = {
     'approve_file','approve_session','revoke_approval','block_file','unblock_file',
     'update_agent','uninstall_agent','return_to_learning','enable_enforcement',
-    'start_installation_mode','end_installation_mode'
+    'start_installation_mode','end_installation_mode','retry_background_policy'
 }
 
 
@@ -856,6 +856,8 @@ def validate_agent_command(command_type: str, payload_text: str) -> Optional[str
         if duration < 1 or duration > 240: return 'start_installation_mode duration_minutes must be 1-240.'
     elif command_type == 'end_installation_mode':
         if not positive_int('installation_id'): return 'end_installation_mode requires a positive installation_id.'
+    elif command_type == 'retry_background_policy':
+        if not text('requested_by',256): return 'retry_background_policy requires requested_by.'
     return None
 
 

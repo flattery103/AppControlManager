@@ -130,6 +130,18 @@ class Release0180BackgroundRetryTests(unittest.TestCase):
         self.assertEqual(command["status"], "pending")
         self.assertEqual(tuple(event), ("admin", "background_policy_retry_queued", "d1"))
 
+    def test_retry_command_passes_server_delivery_validation(self):
+        app_module, _ = self.app_with_temp_db()
+        payload = json.dumps({"requested_by": "admin"})
+
+        self.assertIsNone(
+            app_module.validate_agent_command("retry_background_policy", payload)
+        )
+        self.assertEqual(
+            app_module.validate_agent_command("retry_background_policy", "{}"),
+            "retry_background_policy requires requested_by.",
+        )
+
     def test_retry_route_does_not_queue_when_endpoint_command_is_busy(self):
         app_module, path = self.app_with_temp_db()
         self.seed_device(app_module, path)
