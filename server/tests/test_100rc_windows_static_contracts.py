@@ -16,6 +16,11 @@ class WindowsStaticContractTests(unittest.TestCase):
         self.assertIn("DirectorySeparatorChar", source)
         self.assertNotIn("full.StartsWith(Path.GetFullPath(root!)", source)
 
+    def test_heartbeat_reads_summaries_from_the_background_store(self):
+        source = (ROOT / "windows-agent/src/AppGuard.Service/AgentWorker.cs").read_text(encoding="utf-8")
+        self.assertIn("_backgroundPolicyStore.GetWorkSummaries()", source)
+        self.assertNotIn("_backgroundPolicy.GetWorkSummaries()", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -108,7 +108,7 @@ public sealed class AgentWorker : BackgroundService
             BackgroundPolicyFailed = background.Failed,
             BackgroundPolicyError = background.LastError,
             BackgroundPolicyOldestAt = background.OldestPendingAt,
-            BackgroundWork = _backgroundPolicy.GetWorkSummaries().ToList(),
+            BackgroundWork = _backgroundPolicyStore.GetWorkSummaries().ToList(),
             ServiceStatus = "running",
             RuleWorkerStatus = ServiceController.GetServices().Any(x => x.ServiceName == "AppControlManagerRuleWorker" && x.Status == ServiceControllerStatus.Running) ? "running" : "stopped",
             TrayStatus = Process.GetProcessesByName("AppControlManager.Tray").Length > 0 ? "running" : "not_running",
