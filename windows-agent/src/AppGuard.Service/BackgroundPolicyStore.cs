@@ -63,6 +63,11 @@ public sealed class BackgroundPolicyStore
                 entry.Status = BackgroundPolicyStatuses.Superseded;
                 entry.LastError = null;
             }
+            else
+            {
+                entry.RepresentativePath = InstallationLearningReconciler.PreferAvailableRepresentative(
+                    entry.RepresentativePath, representativePath, File.Exists);
+            }
             AddOwner(entry.Owners, requestId, ownerType);
             entry.UpdatedAt = Now();
             return Clone(entry);
@@ -81,6 +86,11 @@ public sealed class BackgroundPolicyStore
             {
                 entry = new RuleCacheEntry { CacheKey = key, Kind = "hash", Status = BackgroundPolicyStatuses.Queued, Sha256 = hash, RepresentativePath = representativePath };
                 snapshot.Rules.Add(entry);
+            }
+            else
+            {
+                entry.RepresentativePath = InstallationLearningReconciler.PreferAvailableRepresentative(
+                    entry.RepresentativePath, representativePath, File.Exists);
             }
             AddOwner(entry.Owners, requestId, ownerType);
             entry.UpdatedAt = Now();
@@ -206,6 +216,7 @@ public sealed class BackgroundPolicyStore
             stats.Observed++;
             var filePath = (item.FilePath ?? string.Empty).Trim();
             if (filePath.Length == 0) { stats.Unpreparable++; continue; }
+            if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }
             RuleCacheEntry? prepared = null;
             var publisher = (item.Publisher ?? string.Empty).Trim();
             var product = (item.ProductName ?? string.Empty).Trim();
@@ -227,6 +238,7 @@ public sealed class BackgroundPolicyStore
                 CountQueueDisposition(before, prepared, stats);
             }
             if (prepared is null) { stats.Unpreparable++; continue; }
+            stats.PreparedRuleKeysByPath[filePath] = prepared.CacheKey;
             UpsertLearningReference(item.RecordId, filePath, prepared.CacheKey);
         }
         return stats;

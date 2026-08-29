@@ -21,9 +21,14 @@ const string deletedRule = "hash|deleted";
 
 var mixed = InstallationLearningReconciler.Create(
     new[] { firefoxPath, deletedTempPath },
-    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [firefoxPath] = firefoxRule },
+    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        [firefoxPath] = firefoxRule,
+        [deletedTempPath] = deletedRule
+    },
     new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
-    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    path => path.Equals(firefoxPath, StringComparison.OrdinalIgnoreCase));
 SequenceEqual(new[] { firefoxRule }, mixed.RequiredRuleKeys, "A queued stale reference must not make a deleted file mandatory.");
 Equal(1, mixed.SkippedCount, "The deleted unprepared file must be counted as skipped.");
 
@@ -31,7 +36,8 @@ var reusable = InstallationLearningReconciler.Create(
     new[] { deletedTempPath },
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
     new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
-    new HashSet<string>(new[] { deletedRule }, StringComparer.OrdinalIgnoreCase));
+    new HashSet<string>(new[] { deletedRule }, StringComparer.OrdinalIgnoreCase),
+    _ => false);
 SequenceEqual(new[] { deletedRule }, reusable.RequiredRuleKeys, "A valid cached Ready fragment may cover a file that has since disappeared.");
 Equal(0, reusable.SkippedCount, "A reusable Ready fragment must not also be reported as skipped.");
 
@@ -39,7 +45,8 @@ var unusable = InstallationLearningReconciler.Create(
     new[] { deletedTempPath },
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
     new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
-    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    _ => false);
 Equal(0, unusable.RequiredRuleKeys.Count, "A session with only a stale queued reference must have zero safe rules.");
 Equal(1, unusable.SkippedCount, "A session with only a stale queued reference must retain its skipped count.");
 

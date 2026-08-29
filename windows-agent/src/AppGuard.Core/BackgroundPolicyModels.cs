@@ -75,6 +75,7 @@ public sealed class LearningPreparationStats
     public int Reused { get; set; }
     public int Queued { get; set; }
     public int Unpreparable { get; set; }
+    public Dictionary<string, string> PreparedRuleKeysByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class BackgroundRuleFragmentResult

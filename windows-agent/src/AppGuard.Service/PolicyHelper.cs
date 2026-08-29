@@ -555,8 +555,18 @@ public sealed class PolicyHelper
                 var learned = ReadLearnedApplications();
                 var prep = _backgroundStore.PrepareLearningEvents(learned);
 
-                var paths = learned.Select(x => x.FilePath ?? string.Empty).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                var requiredKeys = _backgroundStore.LearningRuleKeysForPaths(paths);
+                var snapshot = _backgroundStore.Snapshot();
+                var readyExistingRuleKeys = snapshot.Rules
+                    .Where(x => x.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(x.FragmentXmlPath) && File.Exists(x.FragmentXmlPath))
+                    .Select(x => x.CacheKey)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var plan = InstallationLearningReconciler.Create(
+                    learned.Select(x => x.FilePath),
+                    prep.PreparedRuleKeysByPath,
+                    snapshot.Learning,
+                    readyExistingRuleKeys,
+                    File.Exists);
+                var requiredKeys = plan.RequiredRuleKeys;
                 var rules = _backgroundStore.RulesForKeys(requiredKeys).ToDictionary(x => x.CacheKey, StringComparer.OrdinalIgnoreCase);
                 var unresolved = 0;
                 foreach (var key in requiredKeys)
@@ -580,10 +590,10 @@ public sealed class PolicyHelper
                     .Where(x => x.Status == BackgroundPolicyStatuses.Ready && !string.IsNullOrWhiteSpace(x.FragmentXmlPath) && File.Exists(x.FragmentXmlPath))
                     .ToArray();
                 if (ready.Length != requiredKeys.Count) unresolved += Math.Max(0, requiredKeys.Count - ready.Length - unresolved);
-                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} skipped={prep.Unpreparable} unresolved={unresolved}");
+                _log.Write($"installation-finalize delta id={installationId} learned={learned.Count} prepared={ready.Length} skipped={plan.SkippedCount} unresolved={unresolved}");
                 if (unresolved > 0) throw new InvalidOperationException($"Installation Mode has {unresolved} unresolved learned authorization fragment(s).");
-                if (learned.Count > 0 && ready.Length == 0 && prep.Unpreparable > 0)
-                    throw new InvalidOperationException($"Installation Mode learned {prep.Unpreparable} file(s), but none could be converted into safe authorization rules.");
+                if (learned.Count > 0 && ready.Length == 0 && plan.SkippedCount > 0)
+                    throw new InvalidOperationException($"Installation Mode learned {plan.SkippedCount} file(s), but none could be converted into safe authorization rules.");
 
                 if (ready.Length > 0)
                 {
@@ -604,7 +614,7 @@ public sealed class PolicyHelper
                 {
                     LearnedCount = learned.Count,
                     InstalledRuleCount = ready.Length,
-                    SkippedCount = prep.Unpreparable
+                    SkippedCount = plan.SkippedCount
                 };
             }
             finally { _policyGenerationGate.Release(); }

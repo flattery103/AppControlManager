@@ -145,13 +145,16 @@ class Release0172InstallationLearningTests(unittest.TestCase):
 
     def test_client_retains_valid_rules_when_temporary_files_are_unpreparable(self):
         helper = self.text("windows-agent/src/AppGuard.Service/PolicyHelper.cs")
+        store = self.text("windows-agent/src/AppGuard.Service/BackgroundPolicyStore.cs")
         manager = self.text("windows-agent/src/AppGuard.Service/InstallationModeManager.cs")
         models = self.text("windows-agent/src/AppGuard.Core/InstallationModeModels.cs")
         finalizer = helper[helper.index("FinalizeInstallationModeAsync"):helper.index("ForceEnforcementAsync")]
 
         self.assertIn("Task<InstallationFinalizationResult> FinalizeInstallationModeAsync", helper)
         self.assertNotIn("if (prep.Unpreparable > 0)", finalizer)
-        self.assertIn("SkippedCount = prep.Unpreparable", finalizer)
+        self.assertIn("InstallationLearningReconciler.Create", finalizer)
+        self.assertIn("SkippedCount = plan.SkippedCount", finalizer)
+        self.assertIn("if (!File.Exists(filePath)) { stats.Unpreparable++; continue; }", store)
         self.assertLess(finalizer.index("if (ready.Length > 0)"), finalizer.index("ForceEnforcementCoreAsync"))
         self.assertIn("public sealed class InstallationFinalizationResult", models)
         self.assertIn('"completed_with_warnings"', manager)
@@ -163,7 +166,7 @@ class Release0172InstallationLearningTests(unittest.TestCase):
         finalizer = helper[helper.index("FinalizeInstallationModeAsync"):helper.index("ForceEnforcementAsync")]
 
         self.assertIn(
-            "learned.Count > 0 && ready.Length == 0 && prep.Unpreparable > 0",
+            "learned.Count > 0 && ready.Length == 0 && plan.SkippedCount > 0",
             finalizer,
         )
         self.assertIn("none could be converted into safe authorization rules", finalizer)
