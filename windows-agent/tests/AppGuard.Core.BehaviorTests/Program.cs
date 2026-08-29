@@ -20,31 +20,44 @@ const string firefoxRule = "product|mozilla|firefox";
 const string deletedRule = "hash|deleted";
 
 var mixed = InstallationLearningReconciler.Create(
-    new[] { firefoxPath, deletedTempPath },
+    new[]
+    {
+        new InstallationLearnedFile(firefoxPath, 101),
+        new InstallationLearnedFile(deletedTempPath, 102)
+    },
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         [firefoxPath] = firefoxRule,
         [deletedTempPath] = deletedRule
     },
-    new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
+    new[] { new LearningRuleReference { RecordId = 90, FilePath = deletedTempPath, RuleKey = deletedRule } },
     new HashSet<string>(StringComparer.OrdinalIgnoreCase),
     path => path.Equals(firefoxPath, StringComparison.OrdinalIgnoreCase));
 SequenceEqual(new[] { firefoxRule }, mixed.RequiredRuleKeys, "A queued stale reference must not make a deleted file mandatory.");
 Equal(1, mixed.SkippedCount, "The deleted unprepared file must be counted as skipped.");
 
 var reusable = InstallationLearningReconciler.Create(
-    new[] { deletedTempPath },
+    new[] { new InstallationLearnedFile(deletedTempPath, 202) },
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-    new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
+    new[] { new LearningRuleReference { RecordId = 202, FilePath = deletedTempPath, RuleKey = deletedRule } },
     new HashSet<string>(new[] { deletedRule }, StringComparer.OrdinalIgnoreCase),
     _ => false);
 SequenceEqual(new[] { deletedRule }, reusable.RequiredRuleKeys, "A valid cached Ready fragment may cover a file that has since disappeared.");
 Equal(0, reusable.SkippedCount, "A reusable Ready fragment must not also be reported as skipped.");
 
-var unusable = InstallationLearningReconciler.Create(
-    new[] { deletedTempPath },
+var crossSession = InstallationLearningReconciler.Create(
+    new[] { new InstallationLearnedFile(deletedTempPath, 303) },
     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-    new[] { new LearningRuleReference { FilePath = deletedTempPath, RuleKey = deletedRule } },
+    new[] { new LearningRuleReference { RecordId = 202, FilePath = deletedTempPath, RuleKey = deletedRule } },
+    new HashSet<string>(new[] { deletedRule }, StringComparer.OrdinalIgnoreCase),
+    _ => false);
+Equal(0, crossSession.RequiredRuleKeys.Count, "A Ready fragment from another learning session must not authorize a reused path.");
+Equal(1, crossSession.SkippedCount, "A cross-session same-path reference must remain skipped.");
+
+var unusable = InstallationLearningReconciler.Create(
+    new[] { new InstallationLearnedFile(deletedTempPath, 404) },
+    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+    new[] { new LearningRuleReference { RecordId = 404, FilePath = deletedTempPath, RuleKey = deletedRule } },
     new HashSet<string>(StringComparer.OrdinalIgnoreCase),
     _ => false);
 Equal(0, unusable.RequiredRuleKeys.Count, "A session with only a stale queued reference must have zero safe rules.");
@@ -57,4 +70,4 @@ var representative = InstallationLearningReconciler.PreferAvailableRepresentativ
     available.Contains);
 Equal(firefoxPath, representative, "A current valid equivalent file must replace a deleted representative path.");
 
-Console.WriteLine("AppGuard.Core behavior tests passed (4 cases).");
+Console.WriteLine("AppGuard.Core behavior tests passed (5 cases).");
