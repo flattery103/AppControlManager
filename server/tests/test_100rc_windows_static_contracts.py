@@ -6,6 +6,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class WindowsStaticContractTests(unittest.TestCase):
+    def test_tray_is_single_instance_per_interactive_session(self):
+        program = (ROOT / "windows-agent/src/AppGuard.Tray/Program.cs").read_text(encoding="utf-8")
+        self.assertIn("new Mutex(", program)
+        self.assertIn("true,", program)
+        self.assertIn("Process.GetCurrentProcess().SessionId", program)
+        self.assertIn("if (!createdNew) return;", program)
+
     def test_service_controller_dependency_is_explicit(self):
         project = (ROOT / "windows-agent/src/AppGuard.Service/AppGuard.Service.csproj").read_text(encoding="utf-8")
         self.assertIn('PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0"', project)

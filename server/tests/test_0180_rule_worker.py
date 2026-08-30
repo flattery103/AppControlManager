@@ -237,7 +237,7 @@ class Release0180RuleWorkerTests(unittest.TestCase):
         self.assertIn("CiTool.exe --refresh", installer)
         self.assertIn("CiTool.exe -lp -json", installer)
         self.assertIn("Assert-InstalledGeneratedPolicy", installer)
-        self.assertIn("IsCurrentlyEnforced", verification)
+        self.assertIn("IsEnforced", verification)
         self.assertIn("IsAuthorized", verification)
 
     def test_deny_merge_and_identity_are_local_system_only_and_fail_closed(self):
@@ -263,10 +263,10 @@ class Release0180RuleWorkerTests(unittest.TestCase):
         self.assertNotIn("Select-Object -First", verification)
         self.assertNotIn("$enforced=$true", verification)
         self.assertNotIn("$authorized=$true", verification)
-        self.assertIn("IsCurrentlyEnforced property is missing", verification)
+        self.assertIn("IsEnforced property is missing", verification)
         self.assertIn("IsAuthorized property is missing", verification)
-        self.assertIn("$installed.IsCurrentlyEnforced -isnot [bool]", verification)
-        self.assertIn("$installed.IsCurrentlyEnforced -ne $true", verification)
+        self.assertIn("$installed.IsEnforced -isnot [bool]", verification)
+        self.assertIn("$installed.IsEnforced -ne $true", verification)
         self.assertIn("$installed.IsAuthorized -isnot [bool]", verification)
         self.assertIn("$installed.IsAuthorized -ne $true", verification)
 

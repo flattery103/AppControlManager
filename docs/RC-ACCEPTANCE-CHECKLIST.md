@@ -1,10 +1,10 @@
-# AppControl Manager 1.0.0-rc.2 Acceptance Checklist
+# AppControl Manager 1.0.0-rc.3 Acceptance Checklist
 
 ## Server and release
 
 - [ ] Database migration completes without data loss.
 - [ ] Backup and restore are proven on a nonproduction copy.
-- [ ] Server health reports `1.0.0-rc.2`.
+- [ ] Server health reports `1.0.0-rc.3`.
 - [ ] Main and tag Windows builds pass.
 - [ ] The GitHub release is marked prerelease and contains all signed assets.
 

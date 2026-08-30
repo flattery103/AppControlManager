@@ -1,0 +1,6 @@
+AppControl Manager 1.0.0-rc.3
+
+- Corrects installed-policy validation to require the Boolean CiTool IsEnforced value.
+- Continues to require IsAuthorized and an exact policy ID match before reporting success.
+- Makes the interactive tray single instance per Windows session.
+- Prevents duplicate request windows when startup or an agent upgrade launches the tray twice.

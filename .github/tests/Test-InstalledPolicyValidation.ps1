@@ -13,12 +13,12 @@ function Assert-Throws([string]$Name,[scriptblock]$Action) {
 $policyId='{11111111-1111-1111-1111-111111111111}'
 $installed=[pscustomobject]@{
     PolicyID='11111111-1111-1111-1111-111111111111'
-    IsCurrentlyEnforced=$true
+    IsEnforced=$true
     IsAuthorized=$true
 }
 
 $actual=Assert-InstalledGeneratedPolicy -Policies @($installed) -PolicyId $policyId
-if($actual.PolicyID -ne $installed.PolicyID -or $actual.IsCurrentlyEnforced -ne $true -or $actual.IsAuthorized -ne $true){
+if($actual.PolicyID -ne $installed.PolicyID -or $actual.IsEnforced -ne $true -or $actual.IsAuthorized -ne $true){
     throw 'Exact installed policy was not returned.'
 }
 
@@ -28,13 +28,13 @@ Assert-Throws 'missing enforcement property accepted' {
     Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsAuthorized=$true }) -PolicyId $policyId
 }
 Assert-Throws 'missing authorization property accepted' {
-    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsCurrentlyEnforced=$true }) -PolicyId $policyId
+    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsEnforced=$true }) -PolicyId $policyId
 }
 Assert-Throws 'string enforcement value accepted as true' {
-    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsCurrentlyEnforced='false'; IsAuthorized=$true }) -PolicyId $policyId
+    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsEnforced='false'; IsAuthorized=$true }) -PolicyId $policyId
 }
 Assert-Throws 'false authorization accepted' {
-    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsCurrentlyEnforced=$true; IsAuthorized=$false }) -PolicyId $policyId
+    Assert-InstalledGeneratedPolicy -Policies @([pscustomobject]@{ PolicyID=$policyId; IsEnforced=$true; IsAuthorized=$false }) -PolicyId $policyId
 }
 
 Write-Output 'Installed policy validation behavior tests passed (7 cases).'
