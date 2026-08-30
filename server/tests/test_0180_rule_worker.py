@@ -240,6 +240,15 @@ class Release0180RuleWorkerTests(unittest.TestCase):
         self.assertIn("IsEnforced", verification)
         self.assertIn("IsAuthorized", verification)
 
+    def test_metadata_free_signed_files_use_hash_instead_of_publisher_only_rules(self):
+        common = self.read("windows-agent/scripts/Common.ps1")
+        worker = self.read("windows-agent/scripts/New-WorkerPolicy.ps1")
+        probe = self.read(".github/tests/Test-WorkerRuleSelection.ps1")
+        self.assertIn("function Test-AppGuardFilePublisherCandidate", common)
+        self.assertIn("Test-AppGuardFilePublisherCandidate $meta", worker)
+        self.assertIn("New-CIPolicyRule -Level Hash", worker)
+        self.assertIn("publisher-only metadata", probe)
+
     def test_deny_merge_and_identity_are_local_system_only_and_fail_closed(self):
         worker = self.read("windows-agent/scripts/New-WorkerPolicy.ps1")
         installer = self.read("windows-agent/scripts/Install-GeneratedPolicy.ps1")

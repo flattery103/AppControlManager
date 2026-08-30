@@ -132,7 +132,7 @@ namespace AppGuard {
 
 function Get-FileMetadata([string]$Path) {
     $resolved = Resolve-CIFilePath $Path
-    $o = [ordered]@{ file_path=$resolved; sha256=$null; publisher=$null; product_name=$null; file_version=$null }
+    $o = [ordered]@{ file_path=$resolved; sha256=$null; publisher=$null; product_name=$null; file_version=$null; original_filename=$null; internal_name=$null }
     if (Test-Path -LiteralPath $resolved -PathType Leaf) {
         try { $o.sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash } catch {}
         try {
@@ -143,6 +143,8 @@ function Get-FileMetadata([string]$Path) {
             $v = (Get-Item -LiteralPath $resolved).VersionInfo
             $o.product_name = $v.ProductName
             $o.file_version = $v.FileVersion
+            $o.original_filename = $v.OriginalFilename
+            $o.internal_name = $v.InternalName
         } catch {}
     }
     return [pscustomobject]$o
@@ -324,6 +326,19 @@ function Test-AppGuardProductFamilyCandidate([string]$ProductName, [string]$Publ
     }
     if ($name -match '(?i)^Microsoft.{0,3}\.NET($|\s)' -or $name -match '(?i)^\.NET($|\s)') { return $false }
     return $true
+}
+
+function Test-AppGuardFilePublisherCandidate($Metadata) {
+    if ($null -eq $Metadata -or
+        [string]::IsNullOrWhiteSpace([string]$Metadata.publisher) -or
+        [string]::IsNullOrWhiteSpace([string]$Metadata.file_version)) {
+        return $false
+    }
+    return -not (
+        [string]::IsNullOrWhiteSpace([string]$Metadata.product_name) -and
+        [string]::IsNullOrWhiteSpace([string]$Metadata.original_filename) -and
+        [string]::IsNullOrWhiteSpace([string]$Metadata.internal_name)
+    )
 }
 
 function Get-SupplementalRuleType([string]$XmlPath) {

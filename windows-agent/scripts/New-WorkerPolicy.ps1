@@ -19,9 +19,10 @@ $meta=Get-FileMetadata $resolved
 $timer=[Diagnostics.Stopwatch]::StartNew()
 $rules=@()
 $mode='hash'
+$canFilePublisher=Test-AppGuardFilePublisherCandidate $meta
 
 if($Operation -eq 'primary_allow') {
-    if(-not [string]::IsNullOrWhiteSpace([string]$meta.publisher) -and
+    if($canFilePublisher -and
        (Test-AppGuardProductFamilyCandidate ([string]$meta.product_name) ([string]$meta.publisher))) {
         try {
             $rules += New-CIPolicyRule -Level FilePublisher -SpecificFileNameLevel ProductName -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved
@@ -30,7 +31,7 @@ if($Operation -eq 'primary_allow') {
             $rules += New-CIPolicyRule -Level FilePublisher -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved
             $mode='filepublisher'
         }
-    } else {
+    } elseif($canFilePublisher) {
         try {
             $rules += New-CIPolicyRule -Level FilePublisher -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved
             $mode='filepublisher'
@@ -38,11 +39,14 @@ if($Operation -eq 'primary_allow') {
             $rules += New-CIPolicyRule -Level Hash -DriverFilePath $resolved
             $mode='hash'
         }
+    } else {
+        $rules += New-CIPolicyRule -Level Hash -DriverFilePath $resolved
+        $mode='hash'
     }
     if($rules.Count -eq 0){ throw 'No primary App Control rule could be generated.' }
     New-CIPolicy -MultiplePolicyFormat -FilePath $fixedOutput -Rules $rules -UserPEs | Out-Null
 } else {
-    $useFamily=Test-AppGuardProductFamilyCandidate ([string]$meta.product_name) ([string]$meta.publisher)
+    $useFamily=$canFilePublisher -and (Test-AppGuardProductFamilyCandidate ([string]$meta.product_name) ([string]$meta.publisher))
     if($useFamily) {
         try {
             $rules += New-CIPolicyRule -Level FilePublisher -SpecificFileNameLevel ProductName -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved -Deny
@@ -51,7 +55,7 @@ if($Operation -eq 'primary_allow') {
             # Fall through to conservative per-file deny.
         }
     }
-    if($rules.Count -eq 0) {
+    if($rules.Count -eq 0 -and $canFilePublisher) {
         try {
             $rules += New-CIPolicyRule -Level FilePublisher -Fallback SignedVersion,Publisher,Hash -DriverFilePath $resolved -Deny
             $mode='filepublisher'
@@ -59,6 +63,10 @@ if($Operation -eq 'primary_allow') {
             $rules += New-CIPolicyRule -Level Hash -DriverFilePath $resolved -Deny
             $mode='hash'
         }
+    }
+    if($rules.Count -eq 0) {
+        $rules += New-CIPolicyRule -Level Hash -DriverFilePath $resolved -Deny
+        $mode='hash'
     }
     if($rules.Count -eq 0){ throw 'No App Control deny rules could be generated.' }
     New-CIPolicy -MultiplePolicyFormat -FilePath $fixedOutput -Rules $rules -UserPEs | Out-Null

@@ -1,0 +1,6 @@
+AppControl Manager 1.0.0-rc.4
+
+- Sends signed, metadata-free components directly to exact hash authorization.
+- Prevents Windows FilePublisher generation from producing unsafe publisher-only authorization for these files.
+- Continues using FilePublisher rules for signed files with usable product or filename identity and version metadata.
+- Keeps publisher-only policies prohibited while permitting verified SHA-1 and SHA-256 hash rules.

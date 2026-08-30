@@ -1,8 +1,8 @@
-# AppControl Manager 1.0.0-rc.3
+# AppControl Manager 1.0.0-rc.4
 
 ## 1.0.0 Release Candidate 1
 
-Version 1.0.0-rc.3 is the feature-complete release candidate for production validation. It corrects installed-policy status validation and prevents duplicate tray instances while retaining RC2's safe cross-signed Authenticode handling and the operational features introduced in RC1.
+Version 1.0.0-rc.4 is the feature-complete release candidate for production validation. It safely falls back to exact hash authorization for signed components without version identity while retaining RC3's policy-status and single-instance tray fixes.
 
 This is a prerelease. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
@@ -89,7 +89,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.3`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.4`:
 
 ```text
 AZURE_CLIENT_ID

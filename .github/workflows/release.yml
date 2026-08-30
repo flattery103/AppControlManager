@@ -30,6 +30,9 @@ jobs:
       - name: Run installed-policy validation behavior tests
         shell: powershell
         run: .\.github\tests\Test-InstalledPolicyValidation.ps1
+      - name: Run worker rule-selection behavior tests
+        shell: powershell
+        run: .\.github\tests\Test-WorkerRuleSelection.ps1
 
       - name: Determine version
         shell: powershell

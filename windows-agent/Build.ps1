@@ -1,6 +1,6 @@
 param(
     [string]$Configuration='Release',
-    [string]$Version='1.0.0-rc.3',
+    [string]$Version='1.0.0-rc.4',
     [ValidateSet('Full','Prepare','Package')]
     [string]$Stage='Full',
     [switch]$RequireSignedPayload
