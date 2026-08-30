@@ -1,0 +1,6 @@
+AppControl Manager 1.0.0-rc.6
+
+- Gives a product rule a fresh attempt budget whenever a lower-version candidate supersedes its existing fragment.
+- Repairs existing superseded rules stranded at the three-attempt limit when the agent service starts.
+- Allows dependent approval bundles to resume automatically after the shared rule becomes ready.
+- Clears false permanent Working health and pending counts after the recovered queue completes.

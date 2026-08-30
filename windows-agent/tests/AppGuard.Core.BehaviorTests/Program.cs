@@ -14,6 +14,17 @@ static void SequenceEqual(IEnumerable<string> expected, IEnumerable<string> actu
         throw new InvalidOperationException($"{message} Expected=[{string.Join(',', left)}]; Actual=[{string.Join(',', right)}]");
 }
 
+var strandedSuperseded = new RuleCacheEntry
+{
+    Status = BackgroundPolicyStatuses.Superseded,
+    Attempts = 3,
+    LastError = "old failure"
+};
+BackgroundPolicyRecovery.PrepareSupersededRule(strandedSuperseded);
+Equal(BackgroundPolicyStatuses.Superseded, strandedSuperseded.Status, "Recovered work must remain marked superseded until claimed.");
+Equal(0, strandedSuperseded.Attempts, "A superseded rule must receive a fresh attempt budget.");
+Equal<string?>(null, strandedSuperseded.LastError, "A superseded rule must not retain an obsolete failure.");
+
 const string firefoxPath = @"C:\Program Files\Mozilla Firefox\firefox.exe";
 const string deletedTempPath = @"C:\Users\user\AppData\Local\Temp\setup.tmp.dll";
 const string firefoxRule = "product|mozilla|firefox";

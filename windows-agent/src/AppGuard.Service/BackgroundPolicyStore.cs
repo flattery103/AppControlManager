@@ -35,6 +35,11 @@ public sealed class BackgroundPolicyStore
                 bundle.LastError = "Recovered after agent restart while processing.";
                 bundle.UpdatedAt = Now();
             }
+            foreach (var rule in snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Superseded && x.Attempts >= 3))
+            {
+                BackgroundPolicyRecovery.PrepareSupersededRule(rule);
+                rule.UpdatedAt = Now();
+            }
             foreach (var rule in snapshot.Rules.Where(x => x.Status == BackgroundPolicyStatuses.Failed
                 && (x.LastError ?? string.Empty).StartsWith(LegacyMissingRepresentativeError, StringComparison.Ordinal)))
             {
@@ -73,8 +78,7 @@ public sealed class BackgroundPolicyStore
                 entry.MinimumFileVersion = fileVersion;
                 entry.RepresentativePath = representativePath;
                 entry.FragmentXmlPath = null;
-                entry.Status = BackgroundPolicyStatuses.Superseded;
-                entry.LastError = null;
+                BackgroundPolicyRecovery.PrepareSupersededRule(entry);
             }
             else
             {

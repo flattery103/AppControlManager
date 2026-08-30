@@ -15,6 +15,17 @@ public static class BackgroundPolicyStatuses
     public const string NeedsAttention = "needs_attention";
 }
 
+public static class BackgroundPolicyRecovery
+{
+    public static void PrepareSupersededRule(RuleCacheEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        entry.Status = BackgroundPolicyStatuses.Superseded;
+        entry.Attempts = 0;
+        entry.LastError = null;
+    }
+}
+
 public sealed class BackgroundWorkSummary
 {
     [JsonPropertyName("key_digest")] public string KeyDigest { get; set; } = "";

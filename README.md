@@ -1,8 +1,8 @@
-# AppControl Manager 1.0.0-rc.5
+# AppControl Manager 1.0.0-rc.6
 
-## 1.0.0 Release Candidate 5
+## 1.0.0 Release Candidate 6
 
-Version 1.0.0-rc.5 synchronizes heartbeat background-work states with the Windows agent and simplifies successful approval messages. It retains RC4's exact-hash fallback for signed components without version identity.
+Version 1.0.0-rc.6 recovers superseded background rules whose prior attempt count made them unclaimable, allowing their dependent approval bundles to finish. It retains RC5's heartbeat status synchronization and simplified approval display.
 
 This is a prerelease. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
@@ -89,7 +89,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.5`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.6`:
 
 ```text
 AZURE_CLIENT_ID

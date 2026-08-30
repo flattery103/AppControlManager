@@ -56,6 +56,15 @@ class WindowsStaticContractTests(unittest.TestCase):
         self.assertIn("Text = approved ? \"\" : request.DecisionNote ?? \"\"", decision_form)
         self.assertIn("Visible = !approved", decision_form)
 
+    def test_superseded_rules_receive_a_fresh_attempt_budget(self):
+        models = (ROOT / "windows-agent/src/AppGuard.Core/BackgroundPolicyModels.cs").read_text(encoding="utf-8")
+        store = (ROOT / "windows-agent/src/AppGuard.Service/BackgroundPolicyStore.cs").read_text(encoding="utf-8")
+
+        self.assertIn("class BackgroundPolicyRecovery", models)
+        self.assertIn("entry.Attempts = 0;", models)
+        self.assertGreaterEqual(store.count("BackgroundPolicyRecovery.PrepareSupersededRule"), 2)
+        self.assertIn("x.Status == BackgroundPolicyStatuses.Superseded && x.Attempts >= 3", store)
+
 
 if __name__ == "__main__":
     unittest.main()

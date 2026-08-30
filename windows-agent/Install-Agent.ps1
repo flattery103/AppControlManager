@@ -48,5 +48,5 @@ do {
 if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager 1.0.0-rc.5 service and tray installed.' -ForegroundColor Green
+Write-Host 'AppControl Manager 1.0.0-rc.6 service and tray installed.' -ForegroundColor Green
 Write-Host 'No Windows App Control policy was enabled by this installer.' -ForegroundColor Yellow
