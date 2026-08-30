@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.6")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.7")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -465,6 +465,8 @@ def init_db():
         ensure_column(conn, "users", "mfa_recovery_codes", "TEXT")
         ensure_column(conn, "scoped_policies", "deleted_at", "TEXT")
         ensure_column(conn, "scoped_policies", "deleted_by", "TEXT")
+        ensure_column(conn, "scoped_policies", "delete_requested_at", "TEXT")
+        ensure_column(conn, "scoped_policies", "delete_requested_by", "TEXT")
         # Earlier releases reserved MFA columns but did not support enrollment. Avoid locking out any
         # account that has an inconsistent legacy flag without an actual TOTP secret.
         conn.execute("UPDATE users SET mfa_enabled=0 WHERE mfa_enabled=1 AND COALESCE(mfa_secret,'')=''")
@@ -1701,7 +1703,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.6</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.7</div></aside>"
     )
 
 
@@ -2099,7 +2101,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.6"}
+    return {"ok": True, "version": "1.0.0-rc.7"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -2764,9 +2766,9 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
                     "SELECT DISTINCT request_id FROM approval_background_policies WHERE device_id=? AND upper(policy_id)=upper(?) AND request_id IS NOT NULL",
                 ):
                     request_ids.update(r[0] for r in conn.execute(sql,(device_id,policy_id)).fetchall())
-                conn.execute("UPDATE approved_components SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),actor,device_id,policy_id))
-                conn.execute("UPDATE approved_applications SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),actor,device_id,policy_id))
-                conn.execute("UPDATE approval_background_policies SET status='revoked',completed_at=? WHERE device_id=? AND upper(policy_id)=upper(?)",(utcnow(),device_id,policy_id))
+                conn.execute("UPDATE approved_components SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?)",(utcnow(),actor,device_id,policy_id))
+                conn.execute("UPDATE approved_applications SET status='revoked',revoked_at=?,revoked_by=? WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?)",(utcnow(),actor,device_id,policy_id))
+                conn.execute("UPDATE approval_background_policies SET status='revoked',completed_at=? WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?)",(utcnow(),device_id,policy_id))
                 for rid in request_ids:
                     remaining=linked_policy_ids_for_request(conn,device_id,rid)
                     if remaining:
@@ -2774,9 +2776,9 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
                     else:
                         conn.execute("UPDATE approval_requests SET status='revoked',decision_note=? WHERE id=?",(f"All AppControl Manager approval policy layers revoked by {actor}.",rid))
             elif not req.success and policy_id:
-                conn.execute("UPDATE approved_components SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(device_id,policy_id))
-                conn.execute("UPDATE approved_applications SET status='approved' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(device_id,policy_id))
-                conn.execute("UPDATE approval_background_policies SET status='installed',detail=? WHERE device_id=? AND upper(policy_id)=upper(?) AND status='revoking'",(req.result,device_id,policy_id))
+                conn.execute("UPDATE approved_components SET status='approved' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='revoking'",(device_id,policy_id))
+                conn.execute("UPDATE approved_applications SET status='approved' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='revoking'",(device_id,policy_id))
+                conn.execute("UPDATE approval_background_policies SET status='installed',detail=? WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='revoking'",(req.result,device_id,policy_id))
 
         if row["command_type"] == "block_file":
             block_id = payload.get("block_id")
@@ -2875,6 +2877,7 @@ def complete_command(command_id: int, req: CommandComplete, device_id: str = Dep
                         "UPDATE approval_requests SET status='approval_failed',decision_note=? WHERE id=?",
                         (req.result, request_id),
                     )
+        finalize_requested_policy_deletions(conn)
     return {"ok": True}
 
 
@@ -3818,13 +3821,26 @@ def approved_page(busy:int=0,q:str='',page_num:int=Query(1,alias='page'),princip
         if q:
             term=f"%{q.lower()}%"; where.append("(lower(COALESCE(a.product_name,'')) LIKE ? OR lower(a.file_path) LIKE ? OR lower(COALESCE(a.publisher,'')) LIKE ? OR lower(d.hostname) LIKE ?)"); args += [term]*4
         where_sql=' AND '.join(where)
-        total=conn.execute(f"SELECT COUNT(*) n FROM approved_components a JOIN devices d ON d.id=a.device_id WHERE {where_sql}",args).fetchone()['n']
-        rows=conn.execute(f"""SELECT a.*,d.hostname,d.organization_id,d.group_id,o.name organization_name,p.scope_type,p.id scoped_policy_id,(SELECT COUNT(*) FROM approved_components x WHERE x.device_id=a.device_id AND x.policy_id=a.policy_id) policy_component_count FROM approved_components a JOIN devices d ON d.id=a.device_id LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN scoped_policies p ON p.id=a.policy_definition_id WHERE {where_sql} ORDER BY a.id DESC LIMIT ? OFFSET ?""",args+[PAGE_SIZE,(page_num-1)*PAGE_SIZE]).fetchall()
+        source_rows=conn.execute(f"""SELECT a.*,d.hostname,d.organization_id,d.group_id,o.name organization_name,p.scope_type,p.id scoped_policy_id FROM approved_components a JOIN devices d ON d.id=a.device_id LEFT JOIN organizations o ON o.id=d.organization_id LEFT JOIN scoped_policies p ON p.id=a.policy_definition_id WHERE {where_sql} ORDER BY a.id DESC""",args).fetchall()
+        grouped={}
+        for source in source_rows:
+            row=dict(source)
+            policy_key=normalize_policy_guid(row.get('policy_id')) or str(row.get('policy_id') or f"component:{row['id']}").upper()
+            key=(row['device_id'],row.get('request_id') or row['id'],policy_key)
+            if key not in grouped:
+                row['policy_component_count']=1
+                grouped[key]=row
+            else:
+                grouped[key]['policy_component_count']+=1
+        total=len(grouped)
+        grouped_rows=list(grouped.values())
+        rows=grouped_rows[(page_num-1)*PAGE_SIZE:page_num*PAGE_SIZE]
         for r in rows:
             current=r['status'] or 'approved'; actions=''
-            if current=='approved' and principal.can_approve and re.fullmatch(r'[0-9A-Fa-f-]{36}',r['policy_id'] or ''):
-                revoke_label='Disable scoped approval' if r['scoped_policy_id'] else 'Revoke'; opts=scope_options_for_device(conn,principal,r)
-                actions=(f"<div class='action-stack'><form method='post' action='/admin/approved/{r['id']}/revoke'><button class='btn-warning'>{revoke_label}</button></form>"
+            if current=='approved' and principal.can_approve:
+                opts=scope_options_for_device(conn,principal,r)
+                revoke=(f"<form method='post' action='/admin/approved/{r['id']}/revoke'><button class='btn-warning'>{'Disable scoped approval' if r['scoped_policy_id'] else 'Revoke application approval'}</button></form>" if normalize_policy_guid(r['policy_id']) else '')
+                actions=(f"<div class='action-stack'>{revoke}"
                          f"<div class='block-action'><span class='action-label'>Block at scope</span><form class='actions' method='post' action='/admin/approved/{r['id']}/block'><select class='scope-select' name='scope_type'>{opts}</select><button class='btn-danger'>Block</button></form></div></div>")
             component_note=f"<div class='muted'>{r['policy_component_count']} components in policy</div>" if (r['policy_component_count'] or 0)>1 else ''
             apphtml=app_cell(r['product_name'],r['file_path'])+component_note
@@ -4148,9 +4164,10 @@ def audit_log_page(q:str='', page_num:int=Query(1,alias='page'), principal:Princ
 
 
 @app.get('/policies', response_class=HTMLResponse)
-def policies_page(q:str='',policy_action:str='',policy_status:str='',page_num:int=Query(1,alias='page'),principal:Principal=Depends(admin_auth)):
+def policies_page(q:str='',policy_action:str='',policy_status:str='',delete_requested:int=0,page_num:int=Query(1,alias='page'),principal:Principal=Depends(admin_auth)):
     page_num=max(1,page_num)
     with db() as conn:
+        finalize_requested_policy_deletions(conn)
         where=['deleted_at IS NULL']; args=[]
         if not principal.can_manage_global: where.append("(organization_id=? OR scope_type='global')"); args.append(principal.organization_id)
         if q:
@@ -4164,15 +4181,29 @@ def policies_page(q:str='',policy_action:str='',policy_status:str='',page_num:in
         html=[]
         for r in rows:
             label=policy_scope_label(conn,r); action=''; can_manage=principal.can_manage_org and (principal.can_manage_global or r['organization_id']==principal.organization_id)
-            if r['active'] and can_manage: action=f"<form method='post' action='/admin/policies/{r['id']}/disable'><button class='btn-warning'>Disable</button></form>"
-            elif (not r['active']) and can_manage: action=f"<form method='post' action='/admin/policies/{r['id']}/delete' onsubmit=\"return confirm('Delete this disabled policy from the management view? Historical audit references are retained.');\"><button class='btn-danger'>Delete</button></form>"
+            cleanup=policy_cleanup_counts(conn,r['id']) if r['delete_requested_at'] else None
+            if r['delete_requested_at']:
+                pending_total=cleanup['commands']+cleanup['allow_layers']+cleanup['block_layers']
+                parts=[]
+                if cleanup['commands']: parts.append(f"{cleanup['commands']} endpoint command{'s' if cleanup['commands']!=1 else ''}")
+                if cleanup['allow_layers']: parts.append(f"{cleanup['allow_layers']} allow layer{'s' if cleanup['allow_layers']!=1 else ''}")
+                if cleanup['block_layers']: parts.append(f"{cleanup['block_layers']} block layer{'s' if cleanup['block_layers']!=1 else ''}")
+                if cleanup['failed_commands']: parts.append(f"{cleanup['failed_commands']} failed command{'s' if cleanup['failed_commands']!=1 else ''}")
+                retry=(f"<form method='post' action='/admin/policies/{r['id']}/retry-delete'><button class='btn-warning'>Retry Failed Cleanup</button></form>" if cleanup['failed_commands'] and can_manage else '')
+                action=f"<span class='muted'>{escape(', '.join(parts) or 'Finalizing')}</span>{retry}"
+            elif r['active'] and can_manage: action=f"<form method='post' action='/admin/policies/{r['id']}/disable'><button class='btn-warning'>Disable</button></form>"
+            elif can_manage: action=f"<form method='post' action='/admin/policies/{r['id']}/delete' onsubmit=\"return confirm('Queue endpoint cleanup and delete this policy automatically when cleanup completes?');\"><button class='btn-danger'>Delete</button></form>"
             cls='badge-bad' if r['action']=='block' else 'badge-ok'; targets=len(scoped_policy_devices(conn,r)); status_cls='badge-ok' if r['active'] else ''
             appname=r['product_name'] or filename(r['file_path']) or r['name']; appsub='' if appname==r['name'] else f"<div class='muted'>{escape(r['name'])}</div>"
-            html.append(f"<tr><td><div class='app-cell'><b>{escape(appname)}</b>{appsub}</div></td><td><span class='badge {cls}'>{escape(r['action'].upper())}</span></td><td>{escape(label)}<div class='muted'>{targets} target device(s)</div></td><td>{escape(r['identity_type'])}<div class='muted'>{escape(r['rule_type'] or '')}</div></td><td><div class='publisher-short' title='{escape(r['publisher'] or '')}'>{escape(short_publisher(r['publisher']))}</div></td><td><span class='badge {status_cls}'>{'Active' if r['active'] else 'Disabled'}</span><div class='muted'>{escape(r['created_by'] or '')}</div></td><td>{action}</td></tr>")
+            status_label='Pending deletion' if r['delete_requested_at'] else ('Active' if r['active'] else 'Disabled')
+            checkbox=(f"<input type='checkbox' form='bulk-delete-form' name='policy_ids' value='{r['id']}' aria-label='Select {escape(appname)}'>" if can_manage and not r['delete_requested_at'] else '')
+            html.append(f"<tr><td>{checkbox}</td><td><div class='app-cell'><b>{escape(appname)}</b>{appsub}</div></td><td><span class='badge {cls}'>{escape(r['action'].upper())}</span></td><td>{escape(label)}<div class='muted'>{targets} target device(s)</div></td><td>{escape(r['identity_type'])}<div class='muted'>{escape(r['rule_type'] or '')}</div></td><td><div class='publisher-short' title='{escape(r['publisher'] or '')}'>{escape(short_publisher(r['publisher']))}</div></td><td><span class='badge {status_cls}'>{status_label}</span><div class='muted'>{escape(r['created_by'] or '')}</div></td><td>{action}</td></tr>")
     act_opts=f"<option value=''>All actions</option><option value='allow' {'selected' if policy_action=='allow' else ''}>ALLOW</option><option value='block' {'selected' if policy_action=='block' else ''}>BLOCK</option>"
     st_opts=f"<option value=''>All statuses</option><option value='active' {'selected' if policy_status=='active' else ''}>Active</option><option value='disabled' {'selected' if policy_status=='disabled' else ''}>Disabled</option>"
     filters=f"<form class='filters' method='get'><div class='field'><label>Search</label><input name='q' value='{escape(q)}' placeholder='Application, policy or publisher'></div><div class='field'><label>Action</label><select name='policy_action'>{act_opts}</select></div><div class='field'><label>Status</label><select name='policy_status'>{st_opts}</select></div><button class='btn-primary'>Filter</button><a href='/policies'><button type='button'>Clear</button></a></form>"
-    body="<div class='notice-info'><b>Policy precedence:</b> BLOCK always wins over ALLOW. Disable removes policy effect from endpoints; Delete removes a fully cleaned-up disabled policy from this view while retaining audit references.</div>"+filters+f"<div class='card'><table><tr><th>Application / Policy</th><th>Action</th><th>Scope</th><th>Identity</th><th>Publisher</th><th>Status</th><th></th></tr>{''.join(html) or '<tr><td colspan=7><div class=\"empty\">No policies match these filters.</div></td></tr>'}</table></div>{pager('/policies',page_num,total,{'q':q,'policy_action':policy_action,'policy_status':policy_status})}"
+    notice=(f"<div class='notice-info'><b>Deletion queued.</b> {delete_requested} selected polic{'y' if delete_requested==1 else 'ies'} will disappear automatically after endpoint cleanup.</div>" if delete_requested else '')
+    bulk="<form id='bulk-delete-form' class='actions' method='post' action='/admin/policies/delete-selected' onsubmit=\"return confirm('Disable the selected policies, queue endpoint cleanup, and delete them automatically afterward?');\"><button class='btn-danger'>Disable and Delete Selected</button></form>"
+    body=notice+"<div class='notice-info'><b>Policy precedence:</b> BLOCK always wins over ALLOW. Deletion runs endpoint cleanup in the background and removes the management record automatically after completion.</div>"+filters+bulk+f"<div class='card'><table><tr><th></th><th>Application / Policy</th><th>Action</th><th>Scope</th><th>Identity</th><th>Publisher</th><th>Status</th><th></th></tr>{''.join(html) or '<tr><td colspan=8><div class=\"empty\">No policies match these filters.</div></td></tr>'}</table></div>{pager('/policies',page_num,total,{'q':q,'policy_action':policy_action,'policy_status':policy_status})}"
     return page('Application Policies',body,principal,subtitle='Central ALLOW and BLOCK policy inventory across device, group, organization and global scopes.',actions="<a class='button' href='/reports/policies'>Policy Report</a>")
 
 
@@ -4962,9 +4993,9 @@ def queue_linked_policy_revocations(conn: sqlite3.Connection, device_id: str, re
         payload={'policy_id':policy_id,'requested_by':actor,'request_id':request_id}
         if scoped_policy_id is not None: payload['scoped_policy_id']=scoped_policy_id
         conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'revoke_approval',json.dumps(payload),'pending',utcnow()))
-        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status IN ('approved','blocked')",(device_id,request_id,policy_id))
-        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status='approved'",(device_id,request_id,policy_id))
-        conn.execute("UPDATE approval_background_policies SET status='revoking' WHERE device_id=? AND request_id=? AND upper(policy_id)=upper(?) AND status='installed'",(device_id,request_id,policy_id))
+        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status IN ('approved','blocked')",(device_id,request_id,policy_id))
+        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='approved'",(device_id,request_id,policy_id))
+        conn.execute("UPDATE approval_background_policies SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='installed'",(device_id,request_id,policy_id))
         queued+=1
     return queued
 
@@ -4995,8 +5026,8 @@ def revoke_approved(component_id: int, principal: Principal = Depends(admin_auth
             policy_id=normalize_policy_guid(row['policy_id'])
             if not policy_id: raise HTTPException(status_code=400,detail='Approval does not have a removable policy GUID.')
             conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(row['device_id'],'revoke_approval',json.dumps({'policy_id':policy_id,'requested_by':principal.username}),'pending',utcnow()))
-            conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND upper(policy_id)=upper(?) AND status IN ('approved','blocked')",(row['device_id'],policy_id))
-            conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND upper(policy_id)=upper(?) AND status='approved'",(row['device_id'],policy_id))
+            conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status IN ('approved','blocked')",(row['device_id'],policy_id))
+            conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='approved'",(row['device_id'],policy_id))
             queued=1
         audit(conn,principal.username,'approval_revoke_queued',organization_id=row['organization_id'],device_id=row['device_id'],object_type='approved_component',object_id=component_id,detail=f'policy layers queued={queued}')
     return RedirectResponse('/approved',status_code=303)
@@ -5410,10 +5441,14 @@ def disable_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
                         processing+=1
                     else:
                         conn.execute("UPDATE blocked_applications SET status='unblocked',unblocked_at=?,unblocked_by=? WHERE id=?",(utcnow(),principal.username,b['id']))
-                elif b['status']=='blocked' and re.fullmatch(r'[0-9A-Fa-f-]{36}',b['policy_id'] or ''):
-                    conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(b['device_id'],'unblock_file',json.dumps({'block_id':b['id'],'policy_id':b['policy_id'],'requested_by':principal.username,'scoped_policy_id':policy_id}),'pending',utcnow()))
-                    conn.execute("UPDATE blocked_applications SET status='unblocking' WHERE id=?",(b['id'],))
-                    queued+=1
+                elif b['status']=='blocked':
+                    installed_policy_id=normalize_policy_guid(b['policy_id'])
+                    if installed_policy_id:
+                        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(b['device_id'],'unblock_file',json.dumps({'block_id':b['id'],'policy_id':installed_policy_id,'requested_by':principal.username,'scoped_policy_id':policy_id}),'pending',utcnow()))
+                        conn.execute("UPDATE blocked_applications SET status='unblocking' WHERE id=?",(b['id'],))
+                        queued+=1
+                    else:
+                        conn.execute("UPDATE blocked_applications SET status='failed',note=? WHERE id=?",('Installed deny policy ID is unavailable; cleanup requires administrator retry.',b['id']))
                 elif b['status']=='failed':
                     conn.execute("UPDATE blocked_applications SET status='unblocked',unblocked_at=?,unblocked_by=?,note=? WHERE id=?",(utcnow(),principal.username,'Scoped block disabled after deny generation failure.',b['id']))
             detail=f'block removals queued={queued}; pending canceled={canceled}; processing awaiting cleanup={processing}'
@@ -5425,18 +5460,90 @@ def disable_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
 @app.post('/admin/policies/{policy_id}/delete')
 def delete_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
     require_org_admin(principal)
+    disable_policy(policy_id, principal)
     with db() as conn:
         p=conn.execute('SELECT * FROM scoped_policies WHERE id=? AND deleted_at IS NULL',(policy_id,)).fetchone()
         if not p: raise HTTPException(status_code=404,detail='Policy not found')
         if p['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator required')
         if p['organization_id'] is not None: require_org_access(principal,p['organization_id'])
-        if p['active']: raise HTTPException(status_code=400,detail='Disable the policy before deleting it.')
-        active_commands=conn.execute("SELECT COUNT(*) n FROM commands WHERE status IN ('pending','processing') AND payload LIKE ?",(f'%\"scoped_policy_id\": {policy_id}%',)).fetchone()['n']
-        active_allow=conn.execute("SELECT COUNT(*) n FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','revoking')",(policy_id,)).fetchone()['n']
-        active_allow += conn.execute("SELECT COUNT(*) n FROM approved_applications WHERE policy_definition_id=? AND status IN ('approved','revoking')",(policy_id,)).fetchone()['n']
-        active_block=conn.execute("SELECT COUNT(*) n FROM blocked_applications WHERE policy_definition_id=? AND status IN ('blocking','blocked','unblocking')",(policy_id,)).fetchone()['n']
-        if active_commands or active_allow or active_block:
-            raise HTTPException(status_code=409,detail='Endpoint cleanup is still in progress for this policy. Wait for revoke/unblock operations to complete, then delete it.')
-        conn.execute('UPDATE scoped_policies SET deleted_at=?,deleted_by=? WHERE id=?',(utcnow(),principal.username,policy_id))
-        audit(conn,principal.username,'scoped_policy_deleted',organization_id=p['organization_id'],object_type='scoped_policy',object_id=policy_id,detail=f"{p['action']} {p['name']}")
-    return RedirectResponse('/policies',status_code=303)
+        cleanup=policy_cleanup_counts(conn,policy_id)
+        if p['action']=='allow' and cleanup['allow_layers'] and not cleanup['commands'] and not cleanup['failed_commands']:
+            rows=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(policy_id,)).fetchall()
+            for row in rows:
+                queue_linked_policy_revocations(conn,row['device_id'],row['request_id'],principal.username,policy_id)
+        elif p['action']=='block' and cleanup['block_layers'] and not cleanup['commands'] and not cleanup['failed_commands']:
+            blocks=conn.execute("SELECT * FROM blocked_applications WHERE policy_definition_id=? AND status='blocked'",(policy_id,)).fetchall()
+            for block in blocks:
+                installed_policy_id=normalize_policy_guid(block['policy_id'])
+                if not installed_policy_id: continue
+                conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(block['device_id'],'unblock_file',json.dumps({'block_id':block['id'],'policy_id':installed_policy_id,'requested_by':principal.username,'scoped_policy_id':policy_id}),'pending',utcnow()))
+                conn.execute("UPDATE blocked_applications SET status='unblocking' WHERE id=?",(block['id'],))
+        conn.execute('UPDATE scoped_policies SET delete_requested_at=COALESCE(delete_requested_at,?),delete_requested_by=? WHERE id=?',(utcnow(),principal.username,policy_id))
+        finalize_requested_policy_deletions(conn)
+        audit(conn,principal.username,'scoped_policy_delete_requested',organization_id=p['organization_id'],object_type='scoped_policy',object_id=policy_id,detail=f"{p['action']} {p['name']}")
+    return RedirectResponse('/policies?delete_requested=1',status_code=303)
+
+
+@app.post('/admin/policies/delete-selected')
+def bulk_delete_policies(policy_ids:list[int]=Form(...), principal:Principal=Depends(admin_auth)):
+    require_org_admin(principal)
+    requested=0
+    for policy_id in sorted(set(policy_ids)):
+        delete_policy(policy_id, principal)
+        requested+=1
+    return RedirectResponse(f'/policies?delete_requested={requested}',status_code=303)
+
+
+@app.post('/admin/policies/{policy_id}/retry-delete')
+def retry_policy_deletion(policy_id:int, principal:Principal=Depends(admin_auth)):
+    require_org_admin(principal)
+    with db() as conn:
+        policy=conn.execute('SELECT * FROM scoped_policies WHERE id=? AND delete_requested_at IS NOT NULL AND deleted_at IS NULL',(policy_id,)).fetchone()
+        if not policy: raise HTTPException(status_code=404,detail='Pending policy deletion not found')
+        if policy['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator required')
+        if policy['organization_id'] is not None: require_org_access(principal,policy['organization_id'])
+        retried=0
+        commands=conn.execute("SELECT * FROM commands WHERE status='failed'").fetchall()
+        for command in commands:
+            try: payload=json.loads(command['payload'] or '{}')
+            except Exception: continue
+            if int(payload.get('scoped_policy_id') or 0)!=policy_id: continue
+            conn.execute("UPDATE commands SET status='pending',started_at=NULL,completed_at=NULL,result=NULL,claim_token_hash=NULL WHERE id=?",(command['id'],))
+            if command['command_type']=='unblock_file' and payload.get('block_id'):
+                conn.execute("UPDATE blocked_applications SET status='unblocking' WHERE id=?",(payload['block_id'],))
+            elif command['command_type']=='revoke_approval':
+                installed_policy_id=normalize_policy_guid(payload.get('policy_id'))
+                if installed_policy_id:
+                    conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?)",(command['device_id'],installed_policy_id))
+                    conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?)",(command['device_id'],installed_policy_id))
+            retried+=1
+        audit(conn,principal.username,'scoped_policy_cleanup_retried',organization_id=policy['organization_id'],object_type='scoped_policy',object_id=policy_id,detail=f'commands={retried}')
+    return RedirectResponse('/policies?delete_requested=1',status_code=303)
+
+
+def policy_cleanup_counts(conn:sqlite3.Connection, policy_id:int) -> dict[str,int]:
+    active_commands=0
+    failed_commands=0
+    for command in conn.execute("SELECT status,payload FROM commands WHERE status IN ('pending','processing','failed')").fetchall():
+        try: payload=json.loads(command['payload'] or '{}')
+        except Exception: continue
+        if int(payload.get('scoped_policy_id') or 0)!=policy_id: continue
+        if command['status']=='failed': failed_commands+=1
+        else: active_commands+=1
+    active_allow=conn.execute("SELECT COUNT(*) n FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','revoking')",(policy_id,)).fetchone()['n']
+    active_allow+=conn.execute("SELECT COUNT(*) n FROM approved_applications WHERE policy_definition_id=? AND status IN ('approved','revoking')",(policy_id,)).fetchone()['n']
+    active_block=conn.execute("SELECT COUNT(*) n FROM blocked_applications WHERE policy_definition_id=? AND status IN ('blocking','blocked','unblocking')",(policy_id,)).fetchone()['n']
+    return {'commands':active_commands,'allow_layers':active_allow,'block_layers':active_block,'failed_commands':failed_commands}
+
+
+def finalize_requested_policy_deletions(conn:sqlite3.Connection) -> int:
+    finalized=0
+    rows=conn.execute("SELECT * FROM scoped_policies WHERE delete_requested_at IS NOT NULL AND deleted_at IS NULL AND active=0").fetchall()
+    for policy in rows:
+        counts=policy_cleanup_counts(conn,policy['id'])
+        if counts['commands'] or counts['allow_layers'] or counts['block_layers'] or counts['failed_commands']:
+            continue
+        conn.execute('UPDATE scoped_policies SET deleted_at=?,deleted_by=COALESCE(delete_requested_by,?) WHERE id=?',(utcnow(),'policy-cleanup',policy['id']))
+        audit(conn,policy['delete_requested_by'] or 'policy-cleanup','scoped_policy_deleted',organization_id=policy['organization_id'],object_type='scoped_policy',object_id=policy['id'],detail=f"{policy['action']} {policy['name']}")
+        finalized+=1
+    return finalized

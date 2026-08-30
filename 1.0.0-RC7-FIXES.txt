@@ -1,0 +1,11 @@
+AppControl Manager 1.0.0-rc.7
+
+- Groups background application bundle components into one approval row instead of exposing every component as a separate approval.
+- Restores application-wide revoke actions for bundle policies whose installed policy IDs include braces.
+- Keeps Block available when a legacy approval does not have a removable installed-policy GUID.
+- Adds multi-select bulk policy cleanup with Disable and Delete Selected.
+- Runs endpoint revoke and unblock cleanup asynchronously, shows pending progress, and deletes the server policy record automatically after cleanup succeeds.
+- Redirects single-policy deletion back to the policy inventory instead of displaying a raw HTTP conflict response.
+- Allows administrators to retry failed endpoint cleanup without creating duplicate policy or command records.
+- Resumes unfinished endpoint cleanup when an already-disabled policy is deleted.
+

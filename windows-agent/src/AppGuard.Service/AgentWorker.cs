@@ -11,7 +11,7 @@ public sealed class AgentWorker : BackgroundService
     private static readonly string Version = typeof(AgentWorker).Assembly
         .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
         .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
-        .FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "1.0.0-rc.6";
+        .FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "1.0.0-rc.7";
     private readonly JsonFileStore _store;
     private readonly ApiClient _api;
     private readonly EventCollector _events;

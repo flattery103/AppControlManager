@@ -1,4 +1,4 @@
-# AppControl Manager 1.0.0-rc.6 Administrator Guide
+# AppControl Manager 1.0.0-rc.7 Administrator Guide
 
 Use the dashboard to watch endpoint health, approval requests, installation sessions, commands, updates, and background policy work. Begin the release candidate with a small device group and keep deployments paused until the selected endpoints and server backup are verified.
 
@@ -12,7 +12,7 @@ Use the dashboard to watch endpoint health, approval requests, installation sess
 
 ## Release candidate rollout
 
-Create a deployment in the paused state, assign only the test group, then activate it. Confirm version `1.0.0-rc.6`, valid signatures, service and Rule Worker health, and successful heartbeats before expanding the group.
+Create a deployment in the paused state, assign only the test group, then activate it. Confirm version `1.0.0-rc.7`, valid signatures, service and Rule Worker health, and successful heartbeats before expanding the group.
 
 ## Security boundaries
 

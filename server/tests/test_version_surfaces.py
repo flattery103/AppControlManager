@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "1.0.0-rc.6"
+VERSION = "1.0.0-rc.7"
 FILE_VERSION = "1.0.0.0"
 
 
@@ -51,7 +51,7 @@ class VersionSurfaceTests(unittest.TestCase):
 
     def test_release_documentation_describes_integrated_milestone_and_signing_secrets(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        feature_path = ROOT / "1.0.0-RC4-FIXES.txt"
+        feature_path = ROOT / "1.0.0-RC7-FIXES.txt"
         self.assertTrue(feature_path.is_file())
         self.assertTrue(readme.startswith(f"# AppControl Manager {VERSION}"))
         for secret in (
@@ -64,13 +64,7 @@ class VersionSurfaceTests(unittest.TestCase):
         ):
             self.assertIn(secret, readme)
         features = feature_path.read_text(encoding="utf-8")
-        for phrase in (
-            "metadata-free",
-            "publisher-only",
-            "hash",
-            "filepublisher",
-            "signed",
-        ):
+        for phrase in ("bundle", "revoke", "bulk", "asynchronous", "retry"):
             self.assertIn(phrase, features.lower())
 
     def test_release_candidate_operational_guides_exist(self):
