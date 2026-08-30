@@ -1,0 +1,7 @@
+AppControl Manager 1.0.0-rc.5
+
+- Accepts every background-policy status emitted by the Windows agent, including superseded and expired records.
+- Prevents valid background history from causing HTTP 422 heartbeat failures and false Offline device status.
+- Keeps unknown background-work status values rejected by server validation.
+- Simplifies successful approval messages and hides internal policy details from endpoint users.
+- Removes Request Installation from completed approval views while retaining Run Application and Close.

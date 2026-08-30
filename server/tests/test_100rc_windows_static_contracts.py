@@ -44,6 +44,18 @@ class WindowsStaticContractTests(unittest.TestCase):
         self.assertIn("SignedCms", source)
         self.assertIn("verifiedPublicKeys.Contains", source)
 
+    def test_approved_request_views_hide_policy_notes_and_install_action(self):
+        request_form = (ROOT / "windows-agent/src/AppGuard.Tray/RequestForm.cs").read_text(encoding="utf-8")
+        session_form = (ROOT / "windows-agent/src/AppGuard.Tray/SessionRequestForm.cs").read_text(encoding="utf-8")
+        decision_form = (ROOT / "windows-agent/src/AppGuard.Tray/DecisionForm.cs").read_text(encoding="utf-8")
+
+        self.assertIn("_install.Visible = false;", request_form)
+        self.assertIn("_install.Visible = false;", session_form)
+        self.assertIn('"This application is approved. You can run it now."', request_form)
+        self.assertIn('"This application is approved. You can run it now."', session_form)
+        self.assertIn("Text = approved ? \"\" : request.DecisionNote ?? \"\"", decision_form)
+        self.assertIn("Visible = !approved", decision_form)
+
 
 if __name__ == "__main__":
     unittest.main()

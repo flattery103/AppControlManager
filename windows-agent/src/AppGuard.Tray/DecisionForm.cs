@@ -27,15 +27,14 @@ public sealed class DecisionForm : Form
         };
         UiTheme.StyleHeadline(headline);
         var app = string.IsNullOrWhiteSpace(request.ProductName) ? Path.GetFileName(request.FilePath) : request.ProductName;
-        var componentText = request.ComponentCount > 1 ? $" and {request.ComponentCount - 1} related component(s)" : "";
         var message = new Label
         {
             AutoSize = true,
             MaximumSize = new Size(530, 0),
             Text = approved
                 ? (File.Exists(request.FilePath)
-                    ? $"{app}{componentText} has been approved and the allow policy is installed. You can run the application now."
-                    : $"{app}{componentText} has been approved and the allow policy is installed. Re-run the original application or installer.")
+                    ? $"{app} is approved. You can run it now."
+                    : $"{app} is approved. Re-run the original application or installer.")
                 : revoked
                     ? $"The previous AppControl Manager approval for {app} was revoked by an administrator."
                     : request.Status == "denied"
@@ -43,7 +42,7 @@ public sealed class DecisionForm : Form
                         : $"{app} was approved by the administrator, but AppControl Manager could not apply the policy on this computer."
         };
         UiTheme.StyleBody(message);
-        var note = new Label { AutoSize = true, MaximumSize = new Size(530, 0), Text = request.DecisionNote ?? "" };
+        var note = new Label { AutoSize = true, MaximumSize = new Size(530, 0), Text = approved ? "" : request.DecisionNote ?? "" };
         UiTheme.StyleBody(note, muted: true);
         var run = new Button { Text = "Run Application", AutoSize = true, Visible = approved && File.Exists(request.FilePath) };
         var close = new Button { Text = "Close", AutoSize = true };
@@ -57,7 +56,7 @@ public sealed class DecisionForm : Form
         var table = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(22), RowCount = 5, ColumnCount = 1, BackColor = UiTheme.CardBack };
         table.Controls.Add(headline, 0, 0);
         table.Controls.Add(message, 0, 1);
-        table.Controls.Add(new Label { AutoSize = true, Text = request.FilePath }, 0, 2);
+        table.Controls.Add(new Label { AutoSize = true, Text = request.FilePath, Visible = !approved }, 0, 2);
         table.Controls.Add(note, 0, 3);
         table.Controls.Add(buttons, 0, 4);
         Controls.Add(table);

@@ -259,6 +259,7 @@ public sealed class SessionRequestForm : Form
         var normalized = status.ToLowerInvariant();
         _reason.Enabled = false;
         _submit.Visible = false;
+        _install.Visible = false;
         _block.Visible = false;
         _run.Visible = false;
         var count = Math.Max(Math.Max(_components.Count, _requestComponentCount), 1);
@@ -278,8 +279,8 @@ public sealed class SessionRequestForm : Form
                 _headline.Text = "Application Approved";
                 _run.Visible = File.Exists(PrimaryPath) && Path.GetExtension(PrimaryPath).Equals(".exe", StringComparison.OrdinalIgnoreCase);
                 _status.Text = _run.Visible
-                    ? $"The application and its {count} related component(s) are approved. You can run the application now." + NoteSuffix(note)
-                    : $"The related components are approved. Re-run the original application or installer." + NoteSuffix(note);
+                    ? "This application is approved. You can run it now."
+                    : "Approval is complete. Re-run the original application or installer.";
                 break;
             case "denied":
                 _headline.Text = "Access Request Denied";

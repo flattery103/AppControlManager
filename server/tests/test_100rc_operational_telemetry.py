@@ -93,6 +93,32 @@ class ReleaseCandidateOperationalTelemetryTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             app_module.BackgroundWorkSummaryIn(**{**valid, "status": "invented"})
 
+    def test_heartbeat_accepts_every_agent_background_work_status(self):
+        app_module, _ = self.app_with_temp_db()
+        valid = {
+            "key_digest": "c" * 64,
+            "display_name": "Product",
+            "kind": "product",
+            "attempts": 0,
+            "updated_at": "2026-08-30T21:00:00+00:00",
+        }
+        agent_statuses = {
+            "queued",
+            "processing",
+            "ready",
+            "installed",
+            "superseded",
+            "expired",
+            "failed",
+            "skipped_ephemeral",
+            "needs_attention",
+        }
+
+        for status in agent_statuses:
+            with self.subTest(status=status):
+                summary = app_module.BackgroundWorkSummaryIn(**{**valid, "status": status})
+                self.assertEqual(summary.status, status)
+
 
 if __name__ == "__main__":
     unittest.main()

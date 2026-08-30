@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "1.0.0-rc.4"
+VERSION = "1.0.0-rc.5"
 FILE_VERSION = "1.0.0.0"
 
 

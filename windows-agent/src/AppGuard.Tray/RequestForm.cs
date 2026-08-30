@@ -267,6 +267,7 @@ public sealed class RequestForm : Form
         var locked = normalized is "pending" or "approving" or "approved" or "approved_existing" or "denied" or "approval_failed" or "blocked" or "revoked";
         _reason.Enabled = !locked;
         _submit.Visible = !locked;
+        _install.Visible = false;
         _block.Visible = _allowUserBlock && !locked;
         _run.Visible = false;
 
@@ -285,8 +286,8 @@ public sealed class RequestForm : Form
                 _headline.Text = "Application Approved";
                 _run.Visible = File.Exists(_path.Text);
                 _status.Text = _run.Visible
-                    ? "This application has been approved and the policy is installed. You can run it now." + NoteSuffix(note)
-                    : "This temporary component has been approved and the policy is installed. Re-run the original application or installer." + NoteSuffix(note);
+                    ? "This application is approved. You can run it now."
+                    : "Approval is complete. Re-run the original application or installer.";
                 break;
             case "denied":
                 _headline.Text = "Access Request Denied";
