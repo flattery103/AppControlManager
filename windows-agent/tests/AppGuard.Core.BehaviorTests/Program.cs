@@ -117,4 +117,8 @@ WorkerPolicyValidationBehavior.Run();
 WorkerOutputSnapshotBehavior.Run();
 CrossSignedCertificateBehavior.Run();
 
+Equal(true, PolicyRemovalBehavior.IsAlreadyAbsent(-2147024894, "", ""), "CiTool policy-not-found exit code must be idempotent.");
+Equal(true, PolicyRemovalBehavior.IsAlreadyAbsent(1, "{\"OperationResult\":-2147024894}", ""), "CiTool policy-not-found JSON must be idempotent.");
+Equal(false, PolicyRemovalBehavior.IsAlreadyAbsent(5, "{\"OperationResult\":5}", "access denied"), "Unrelated CiTool failures must remain failures.");
+
 Console.WriteLine("AppGuard.Core behavior tests passed.");

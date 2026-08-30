@@ -8,10 +8,10 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>AppControlManager.Service</AssemblyName>
     <RootNamespace>AppGuard.Service</RootNamespace>
-    <Version>1.0.0-rc.7</Version>
+    <Version>1.0.0-rc.8</Version>
     <FileVersion>1.0.0.0</FileVersion>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <InformationalVersion>1.0.0-rc.7</InformationalVersion>
+    <InformationalVersion>1.0.0-rc.8</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AppGuard.Core\AppGuard.Core.csproj" />

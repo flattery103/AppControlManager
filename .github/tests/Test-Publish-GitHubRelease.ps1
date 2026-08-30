@@ -38,8 +38,11 @@ exit /b 0
     if ($rcCreate -notlike 'release create v1.0.0-rc.1*') {
         throw 'Missing RC release creation invocation.'
     }
-    if ($rcCreate -notmatch '(?:^|\s)--prerelease(?:\s|$)') {
-        throw "RC release creation did not pass --prerelease as one argument: $rcCreate"
+    if ($rcCreate -notmatch '(?:^|\s)--latest(?:\s|$)') {
+        throw "RC release creation did not publish as latest: $rcCreate"
+    }
+    if ($rcCreate -match '(?:^|\s)--prerelease(?:\s|$)') {
+        throw "RC release creation unexpectedly marked the release as prerelease: $rcCreate"
     }
 
     Remove-Item -LiteralPath $calls -Force

@@ -1,0 +1,10 @@
+AppControl Manager 1.0.0-rc.8
+
+- Adds a combined Revoke and Block action that installs an explicit deny before removing supplemental approval layers.
+- Keeps revoked approvals visible with an honest warning when Base Policy or another active policy may still allow the application.
+- Makes endpoint policy removal idempotent when CiTool reports that a policy is already absent.
+- Prevents historical failed approval commands from stranding asynchronous policy deletion.
+- Fully offboards a device by removing AppControl Manager policies and services locally, purging its server operational data, and retaining a minimal audit record.
+- Removes the AppControlManagerRuleWorker service during remote uninstall while preserving unrelated Windows App Control policies.
+- Shows detailed update states on the device detail page and permits an explicit retry of a failed release after the underlying problem is corrected.
+- Publishes release candidates as the latest GitHub release for server-GUI update discovery during testing.

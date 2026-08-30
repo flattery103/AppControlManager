@@ -539,7 +539,8 @@ public sealed class PolicyHelper
     {
         if (string.IsNullOrWhiteSpace(policyId)) throw new InvalidOperationException("Policy ID was empty.");
         var remove = await RunProcessAsync("CiTool.exe", $"--remove-policy {policyId} -json", ct);
-        if (remove.ExitCode != 0) throw new InvalidOperationException($"CiTool remove-policy failed ({remove.ExitCode}): {remove.Stderr} {remove.Stdout}".Trim());
+        if (remove.ExitCode != 0 && !PolicyRemovalBehavior.IsAlreadyAbsent(remove.ExitCode, remove.Stdout, remove.Stderr))
+            throw new InvalidOperationException($"CiTool remove-policy failed ({remove.ExitCode}): {remove.Stderr} {remove.Stdout}".Trim());
         var refresh = await RunProcessAsync("CiTool.exe", "--refresh -json", ct);
         if (refresh.ExitCode != 0) throw new InvalidOperationException($"CiTool refresh failed ({refresh.ExitCode}): {refresh.Stderr} {refresh.Stdout}".Trim());
     }

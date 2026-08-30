@@ -33,6 +33,9 @@ jobs:
       - name: Run worker rule-selection behavior tests
         shell: powershell
         run: .\.github\tests\Test-WorkerRuleSelection.ps1
+      - name: Run agent uninstall behavior tests
+        shell: powershell
+        run: .\.github\tests\Test-AgentUninstall.ps1
 
       - name: Determine version
         shell: powershell
@@ -44,9 +47,9 @@ jobs:
       - name: Run GitHub Release publication probe tests
         shell: powershell
         run: .\.github\tests\Test-Publish-GitHubRelease.ps1
-      - name: Run prerelease publication behavior tests
+      - name: Run latest-release publication behavior tests
         shell: powershell
-        run: .\.github\tests\Test-Prerelease-Publishing.ps1
+        run: .\.github\tests\Test-Latest-Release-Publishing.ps1
 
       - name: Build Windows executables for signing
         shell: powershell

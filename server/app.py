@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.7")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.8")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -578,6 +578,7 @@ def purge_device_record(conn: sqlite3.Connection, device_id: str):
         conn.execute(f'DELETE FROM approval_request_items WHERE request_id IN ({placeholders})',request_ids)
     conn.execute('DELETE FROM approved_components WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM approved_applications WHERE device_id=?',(device_id,))
+    conn.execute('DELETE FROM approval_background_policies WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM blocked_applications WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM approval_requests WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM installation_requests WHERE device_id=?',(device_id,))
@@ -585,7 +586,8 @@ def purge_device_record(conn: sqlite3.Connection, device_id: str):
     conn.execute('DELETE FROM commands WHERE device_id=?',(device_id,))
     conn.execute('DELETE FROM agent_update_history WHERE device_id=?',(device_id,))
     conn.execute("DELETE FROM agent_deployments WHERE scope_type='device' AND scope_id=?",(device_id,))
-    conn.execute("UPDATE scoped_policies SET active=0,deleted_at=COALESCE(deleted_at,?),deleted_by=COALESCE(deleted_by,'device cleanup') WHERE scope_type='device' AND scope_id=?",(utcnow(),device_id))
+    conn.execute("DELETE FROM scoped_policies WHERE scope_type='device' AND scope_id=?",(device_id,))
+    conn.execute("DELETE FROM audit_log WHERE device_id=? OR (object_type='device' AND object_id=?)",(device_id,device_id))
     conn.execute('DELETE FROM devices WHERE id=?',(device_id,))
 
 
@@ -656,7 +658,11 @@ def classify_device_health(row, now: Optional[datetime]=None) -> tuple[str,list[
         return 'Failed',['A background policy or update operation failed.']
     if str(value('service_status','running') or '').lower() not in {'running','healthy'} or str(value('rule_worker_status','running') or '').lower() not in {'running','healthy'}:
         return 'Attention',['A required endpoint service is not running.']
-    if str(value('background_policy_status','') or '').lower() in {'processing','queued','working'} or str(value('update_status','') or '').lower() in {'queued','downloading','staging','activating','installing'}:
+    update_status=str(value('update_status','') or '').lower()
+    if update_status in {'queued','downloading','staging','activating','installing'}:
+        label=update_status.replace('_',' ').title()
+        return label,[f'The endpoint is {update_status.replace("_"," ")} the agent update.']
+    if str(value('background_policy_status','') or '').lower() in {'processing','queued','working'}:
         return 'Working',['The endpoint is actively processing work.']
     return 'Healthy',reasons
 
@@ -1703,7 +1709,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.7</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.8</div></aside>"
     )
 
 
@@ -2101,7 +2107,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.7"}
+    return {"ok": True, "version": "1.0.0-rc.8"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -2610,10 +2616,14 @@ def offboard_complete(req: OffboardComplete, device_id: str = Depends(agent_auth
         d=conn.execute('SELECT organization_id,hostname FROM devices WHERE id=?',(device_id,)).fetchone()
         if not d:
             raise HTTPException(status_code=404,detail='Device not found')
-        state='completed' if req.success else 'failed'
-        conn.execute('UPDATE devices SET offboard_status=?,offboard_result=?,offboard_completed_at=? WHERE id=?',(state,req.result,utcnow() if req.success else None,device_id))
-        audit(conn,'agent','device_offboard_completed' if req.success else 'device_offboard_failed',organization_id=d['organization_id'],device_id=device_id,object_type='device',object_id=device_id,detail=req.result or d['hostname'])
-    return {'ok':True}
+        if req.success:
+            hostname=d['hostname']; organization_id=d['organization_id']
+            purge_device_record(conn,device_id)
+            audit(conn,'agent','device_offboard_completed',organization_id=organization_id,object_type='device',object_id=device_id,detail=f'{hostname}; {req.result or "AppControl Manager removed."}')
+            return {'ok':True,'purged':True}
+        conn.execute('UPDATE devices SET offboard_status=?,offboard_result=?,offboard_completed_at=NULL WHERE id=?',('failed',req.result,device_id))
+        audit(conn,'agent','device_offboard_failed',organization_id=d['organization_id'],device_id=device_id,object_type='device',object_id=device_id,detail=req.result or d['hostname'])
+    return {'ok':True,'purged':False}
 
 
 @app.post("/api/background-policies/report")
@@ -3772,7 +3782,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         elif mode_name!='Learning':
             installation_controls=f"<form class='actions' method='post' action='/admin/devices/{device_id}/installation-mode/start'><label>Installation Mode minutes</label><input type='number' name='duration_minutes' min='1' max='240' value='15' list='device-installation-durations' style='width:82px'><datalist id='device-installation-durations'><option value='15'><option value='30'><option value='60'></datalist><button class='btn-primary'>Start Installation Mode</button></form>"
     health_state,health_reasons=classify_device_health(d)
-    health_cls='badge-ok' if health_state=='Healthy' else ('badge-warn' if health_state in {'Working','Attention','Offline'} else 'badge-bad')
+    health_cls='badge-ok' if health_state=='Healthy' else ('badge-warn' if health_state in {'Working','Attention','Offline','Queued','Downloading','Staging','Activating','Installing'} else 'badge-bad')
     status_badge=f"<span class='badge {health_cls}'>{escape(health_state)}</span>"
     health_detail='; '.join(health_reasons) or 'All reported endpoint components are healthy.'
     control_panel=f"{installation_banner}<div class='panel'><div class='section-head' style='margin-top:0'><h2>Device Control</h2><div class='actions'>{mode_action}</div></div><div class='details-grid'><div class='detail-item'><span class='muted'>Health</span>{status_badge}<div class='muted'>{escape(health_detail)}</div></div><div class='detail-item'><span class='muted'>OS</span><b>{escape(d['os_version'] or '')}</b></div><div class='detail-item'><span class='muted'>Last Seen</span><b>{display_time(d['last_seen']) or 'Never'}</b></div><div class='detail-item'><span class='muted'>Device ID</span><code>{escape(d['id'])}</code></div></div>{group_form}{installation_controls}</div>"
@@ -3817,7 +3827,7 @@ def filtered_rows(conn, principal, sql_global, sql_org, params=()):
 def approved_page(busy:int=0,q:str='',page_num:int=Query(1,alias='page'),principal:Principal=Depends(admin_auth)):
     page_num=max(1,page_num); html=[]
     with db() as conn:
-        clause,params=visible_device_clause(principal,'d'); where=[clause,"COALESCE(a.status,'approved')<>'revoked'"]; args=list(params)
+        clause,params=visible_device_clause(principal,'d'); where=[clause]; args=list(params)
         if q:
             term=f"%{q.lower()}%"; where.append("(lower(COALESCE(a.product_name,'')) LIKE ? OR lower(a.file_path) LIKE ? OR lower(COALESCE(a.publisher,'')) LIKE ? OR lower(d.hostname) LIKE ?)"); args += [term]*4
         where_sql=' AND '.join(where)
@@ -3837,13 +3847,19 @@ def approved_page(busy:int=0,q:str='',page_num:int=Query(1,alias='page'),princip
         rows=grouped_rows[(page_num-1)*PAGE_SIZE:page_num*PAGE_SIZE]
         for r in rows:
             current=r['status'] or 'approved'; actions=''
+            warning=''
             if current=='approved' and principal.can_approve:
                 opts=scope_options_for_device(conn,principal,r)
                 revoke=(f"<form method='post' action='/admin/approved/{r['id']}/revoke'><button class='btn-warning'>{'Disable scoped approval' if r['scoped_policy_id'] else 'Revoke application approval'}</button></form>" if normalize_policy_guid(r['policy_id']) else '')
                 actions=(f"<div class='action-stack'>{revoke}"
-                         f"<div class='block-action'><span class='action-label'>Block at scope</span><form class='actions' method='post' action='/admin/approved/{r['id']}/block'><select class='scope-select' name='scope_type'>{opts}</select><button class='btn-danger'>Block</button></form></div></div>")
+                         f"<div class='block-action'><span class='action-label'>Block at scope</span><form class='actions' method='post' action='/admin/approved/{r['id']}/block'><select class='scope-select' name='scope_type'>{opts}</select><button class='btn-danger'>Block</button></form></div>"
+                         f"<form class='actions' method='post' action='/admin/approved/{r['id']}/revoke-and-block' onsubmit=\"return confirm('Create an explicit deny first, then remove this approval? The deny overrides Base Policy and other allows at the selected scope.')\"><select class='scope-select' name='scope_type'>{opts}</select><button class='btn-danger'>Revoke and Block</button></form></div>")
+            elif current=='revoked' and principal.can_approve:
+                opts=scope_options_for_device(conn,principal,r)
+                warning="<div class='notice-warning'>Supplemental approval removed. Base Policy or another active policy may still allow this application; use Block to enforce a deny.</div>"
+                actions=f"<form class='actions' method='post' action='/admin/approved/{r['id']}/block'><select class='scope-select' name='scope_type'>{opts}</select><button class='btn-danger'>Block</button></form>"
             component_note=f"<div class='muted'>{r['policy_component_count']} components in policy</div>" if (r['policy_component_count'] or 0)>1 else ''
-            apphtml=app_cell(r['product_name'],r['file_path'])+component_note
+            apphtml=app_cell(r['product_name'],r['file_path'])+component_note+warning
             html.append(f"<tr><td>{apphtml}</td><td><a href='/devices/{r['device_id']}'>{escape(r['hostname'])}</a><div class='muted'>{escape(r['organization_name'] or '')}</div></td><td><div class='publisher-short' title='{escape(r['publisher'] or '')}'>{escape(short_publisher(r['publisher']))}</div></td><td>{escape(r['rule_type'] or '')}</td><td>{escape(r['scope_type'] or 'device').title()}</td><td><span class='badge badge-ok'>{escape(current.title())}</span></td><td>{actions}</td></tr>")
     filters=f"<form class='filters' method='get'><div class='field'><label>Search</label><input name='q' value='{escape(q)}' placeholder='Application, publisher or device'></div><button class='btn-primary'>Filter</button><a href='/approved'><button type='button'>Clear</button></a></form>"
     body=("<div class='notice'>Device policy operation already in progress.</div>" if busy else '')+filters+f"<div class='card'><table><tr><th>Application</th><th>Device</th><th>Publisher</th><th>Rule</th><th>Approval Scope</th><th>Status</th><th>Actions</th></tr>{''.join(html) or '<tr><td colspan=7><div class=\"empty\">No approvals match these filters.</div></td></tr>'}</table></div>{pager('/approved',page_num,total,{'q':q})}"
@@ -4594,6 +4610,10 @@ def device_agent_update(device_id:str,release_id:int=Form(...),principal:Princip
         # Replace older active device-specific deployments so the newest manual target wins cleanly.
         conn.execute("UPDATE agent_deployments SET active=0,disabled_at=?,disabled_by=? WHERE scope_type='device' AND scope_id=? AND active=1",(utcnow(),principal.username,device_id))
         cur=conn.execute("INSERT INTO agent_deployments(release_id,scope_type,scope_id,organization_id,rollout_percent,active,created_at,created_by) VALUES(?,'device',?,?,100,1,?,?)",(release_id,device_id,d['organization_id'],utcnow(),principal.username))
+        conn.execute("""UPDATE agent_update_history
+                        SET status='canceled',completed_at=?,detail=COALESCE(detail,'') || ?
+                        WHERE device_id=? AND release_id=? AND status IN ('failed','rolled_back')""",
+                     (utcnow(),' Explicit retry requested by an administrator after correcting the failure.',device_id,release_id))
         conn.execute("UPDATE devices SET update_status=NULL,update_result=NULL WHERE id=?",(device_id,))
         audit(conn,principal.username,'agent_device_update_assigned',organization_id=d['organization_id'],device_id=device_id,object_type='agent_deployment',object_id=cur.lastrowid,detail=r['version'])
         refresh_device_update_target(conn,device_id)
@@ -4633,8 +4653,8 @@ def delete_device_record(device_id:str, principal:Principal=Depends(admin_auth))
         if active:
             raise HTTPException(status_code=409,detail='This device still has a pending or processing command. Wait for it to finish before deleting the server record.')
         hostname=d['hostname']; org_id=d['organization_id']
-        audit(conn,principal.username,'device_record_deleted',organization_id=org_id,object_type='device',object_id=device_id,detail=f'{hostname}; {reason}')
         purge_device_record(conn,device_id)
+        audit(conn,principal.username,'device_record_deleted',organization_id=org_id,object_type='device',object_id=device_id,detail=f'{hostname}; {reason}')
     return RedirectResponse('/devices',status_code=303)
 
 
@@ -5044,6 +5064,14 @@ def block_approved(component_id:int, scope_type:str=Form('device'), principal:Pr
         policy=conn.execute('SELECT * FROM scoped_policies WHERE id=?',(scoped_id,)).fetchone()
         queued,unknown=rollout_scoped_block(conn,policy,principal.username)
         audit(conn,principal.username,'scoped_block_rollout',organization_id=policy['organization_id'],device_id=row['device_id'],object_type='scoped_policy',object_id=scoped_id,detail=f'queued={queued}; no_known_source={unknown}')
+    return RedirectResponse('/policies',status_code=303)
+
+
+@app.post("/admin/approved/{component_id}/revoke-and-block")
+def revoke_and_block_approved(component_id:int, scope_type:str=Form('device'), principal:Principal=Depends(admin_auth)):
+    # Queue the explicit deny first so it wins over learned/base allows before supplemental approval removal runs.
+    block_approved(component_id,scope_type,principal)
+    revoke_approved(component_id,principal)
     return RedirectResponse('/policies',status_code=303)
 
 
@@ -5524,7 +5552,7 @@ def retry_policy_deletion(policy_id:int, principal:Principal=Depends(admin_auth)
 def policy_cleanup_counts(conn:sqlite3.Connection, policy_id:int) -> dict[str,int]:
     active_commands=0
     failed_commands=0
-    for command in conn.execute("SELECT status,payload FROM commands WHERE status IN ('pending','processing','failed')").fetchall():
+    for command in conn.execute("SELECT status,payload FROM commands WHERE command_type IN ('revoke_approval','unblock_file') AND status IN ('pending','processing','failed')").fetchall():
         try: payload=json.loads(command['payload'] or '{}')
         except Exception: continue
         if int(payload.get('scoped_policy_id') or 0)!=policy_id: continue

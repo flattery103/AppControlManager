@@ -52,6 +52,44 @@ class ReleaseCandidatePolicyManagementTests(unittest.TestCase):
         self.assertEqual(html.count('2 components in policy'), 1)
         self.assertEqual(html.count('Revoke application approval'), 1)
         self.assertEqual(html.count('>Block</button>'), 1)
+        self.assertEqual(html.count('>Revoke and Block</button>'), 1)
+
+    def test_revoked_approval_remains_visible_with_enforcement_warning_and_block(self):
+        app_module, path = self.app_with_temp_db()
+        self.seed_approval(app_module, path, '{11111111-1111-1111-1111-111111111111}', components=1)
+        with sqlite3.connect(path) as conn:
+            conn.execute("UPDATE approved_components SET status='revoked'")
+            conn.commit()
+        principal = app_module.Principal(1, 'admin', 'Admin', 'global_admin', None)
+
+        html = app_module.approved_page(busy=0, q='', page_num=1, principal=principal).body.decode()
+
+        self.assertIn('Supplemental approval removed', html)
+        self.assertIn('Base Policy or another active policy may still allow', html)
+        self.assertEqual(html.count('>Block</button>'), 1)
+
+    def test_explicit_same_release_retry_clears_failed_history_latch(self):
+        app_module, path = self.app_with_temp_db()
+        now = app_module.utcnow()
+        with sqlite3.connect(path) as conn:
+            conn.execute("INSERT INTO organizations(id,name,slug,status,created_at) VALUES(704,'Retry Org','retry-org','active',?)", (now,))
+            conn.execute("INSERT INTO devices(id,hostname,device_key_hash,agent_version,created_at,organization_id) VALUES('retry-device','RETRY-PC','x','1.0.0-rc.7',?,704)", (now,))
+            release_id = conn.execute("""INSERT INTO agent_releases(version,channel,file_name,file_path,sha256,size_bytes,active,created_at,created_by)
+                                         VALUES('1.0.0-rc.8','stable','agent.zip','/tmp/agent.zip',?,1,1,?,'admin')""", ('a' * 64, now)).lastrowid
+            conn.execute("""INSERT INTO agent_update_history(device_id,release_id,from_version,target_version,status,created_at,completed_at,detail)
+                             VALUES('retry-device',?,'1.0.0-rc.7','1.0.0-rc.8','failed',?,?,?)""", (release_id, now, now, 'disk full'))
+            conn.commit()
+        principal = app_module.Principal(1, 'admin', 'Admin', 'global_admin', None)
+
+        response = app_module.device_agent_update('retry-device', release_id, principal)
+        self.assertEqual(response.status_code, 303)
+
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            history = conn.execute('SELECT * FROM agent_update_history ORDER BY id').fetchall()
+            self.assertEqual(history[0]['status'], 'canceled')
+            self.assertIn('Explicit retry requested', history[0]['detail'])
+            self.assertTrue(any(row['status'] == 'queued' for row in history[1:]))
 
     def test_block_action_does_not_require_a_removable_policy_guid(self):
         app_module, path = self.app_with_temp_db()
@@ -188,6 +226,51 @@ class ReleaseCandidatePolicyManagementTests(unittest.TestCase):
             policy = conn.execute('SELECT deleted_at FROM scoped_policies WHERE id=?', (policy_id,)).fetchone()
         self.assertEqual(command, ('pending', None, None))
         self.assertIsNone(policy[0])
+
+    def test_historical_approval_failure_does_not_block_policy_deletion(self):
+        app_module, path = self.app_with_temp_db()
+        policy_id = self.seed_deletable_allow_policy(app_module, path)
+        now = app_module.utcnow()
+        with sqlite3.connect(path) as conn:
+            conn.execute("UPDATE scoped_policies SET active=0,delete_requested_at=?,delete_requested_by='admin' WHERE id=?", (now, policy_id))
+            conn.execute("UPDATE approved_components SET status='revoked' WHERE policy_definition_id=?", (policy_id,))
+            conn.execute(
+                "INSERT INTO commands(device_id,command_type,payload,status,created_at,completed_at,result) VALUES('delete-device','approve_file',?,'failed',?,?,?)",
+                (json.dumps({'request_id': 1, 'file_path': 'C:\\Apps\\delete.exe', 'scoped_policy_id': policy_id}), now, now, 'old approval failure'),
+            )
+            conn.commit()
+        with app_module.db() as conn:
+            counts = app_module.policy_cleanup_counts(conn, policy_id)
+            finalized = app_module.finalize_requested_policy_deletions(conn)
+        self.assertEqual(counts['failed_commands'], 0)
+        self.assertEqual(finalized, 1)
+
+    def test_revoke_and_block_queues_deny_before_revoke(self):
+        app_module, path = self.app_with_temp_db()
+        self.seed_approval(app_module, path, '{44444444-4444-4444-4444-444444444444}', components=1)
+        principal = app_module.Principal(1, 'admin', 'Admin', 'global_admin', None)
+        with sqlite3.connect(path) as conn:
+            component_id = conn.execute('SELECT id FROM approved_components').fetchone()[0]
+
+        response = app_module.revoke_and_block_approved(component_id, 'device', principal)
+
+        self.assertEqual(response.status_code, 303)
+        with sqlite3.connect(path) as conn:
+            commands = conn.execute('SELECT command_type FROM commands ORDER BY id').fetchall()
+        self.assertEqual(commands, [('block_file',), ('revoke_approval',)])
+
+    def test_device_health_uses_specific_update_status(self):
+        app_module, _ = self.app_with_temp_db()
+        state, reasons = app_module.classify_device_health({
+            'last_seen': app_module.utcnow(),
+            'background_policy_failed': 0,
+            'update_status': 'staging',
+            'service_status': 'running',
+            'rule_worker_status': 'running',
+            'background_policy_status': 'idle',
+        })
+        self.assertEqual(state, 'Staging')
+        self.assertIn('staging', reasons[0].lower())
 
 
 if __name__ == '__main__':
