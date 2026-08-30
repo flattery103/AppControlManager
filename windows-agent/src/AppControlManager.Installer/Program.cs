@@ -12,7 +12,7 @@ internal static class Program
 {
     private static readonly string Version = typeof(Program).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.1";
+        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.2";
 
     [STAThread]
     static void Main(string[] args)

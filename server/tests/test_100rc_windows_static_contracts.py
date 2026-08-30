@@ -26,6 +26,17 @@ class WindowsStaticContractTests(unittest.TestCase):
         self.assertNotIn("@createFlags", source)
         self.assertNotIn("@editFlags", source)
 
+    def test_cross_signed_authenticode_expansion_is_bounded_by_verified_public_keys(self):
+        path = ROOT / "windows-agent/src/AppGuard.Core/AuthenticodeCertificateIdentity.cs"
+        self.assertTrue(path.is_file())
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("MaximumCertificateTableBytes", source)
+        self.assertIn("MaximumCertificateEntries", source)
+        self.assertIn("MaximumEmbeddedCertificates", source)
+        self.assertIn("PublicKeyFingerprint", source)
+        self.assertIn("SignedCms", source)
+        self.assertIn("verifiedPublicKeys.Contains", source)
+
 
 if __name__ == "__main__":
     unittest.main()

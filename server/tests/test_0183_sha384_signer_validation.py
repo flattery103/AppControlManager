@@ -11,7 +11,10 @@ class Release0183Sha384SignerValidationTests(unittest.TestCase):
 
     def test_worker_identity_calculates_sha384_tbs_certificate_digests(self):
         identity = self.text("windows-agent/src/AppGuard.Core/WorkerPolicyInputIdentity.cs")
-        self.assertIn("SHA384.HashData(tbsCertificate)", identity)
+        certificate_identity = self.text(
+            "windows-agent/src/AppGuard.Core/AuthenticodeCertificateIdentity.cs"
+        )
+        self.assertIn("SHA384.HashData(tbsCertificate)", certificate_identity)
         self.assertIn("40 or 64 or 96", identity)
 
     def test_behavior_suite_covers_sha384_and_unrelated_signers(self):

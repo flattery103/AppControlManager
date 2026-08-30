@@ -104,5 +104,6 @@ Equal(firefoxPath, representative, "A current valid equivalent file must replace
 
 WorkerPolicyValidationBehavior.Run();
 WorkerOutputSnapshotBehavior.Run();
+CrossSignedCertificateBehavior.Run();
 
 Console.WriteLine("AppGuard.Core behavior tests passed.");

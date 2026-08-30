@@ -1,0 +1,7 @@
+AppControl Manager 1.0.0-rc.2
+
+- Fixes FilePublisher validation for executables whose Authenticode signature embeds a cross-signed certificate variant.
+- Matches embedded certificate identities by exact public key to the verified Windows signer chain.
+- Excludes unrelated timestamp certificates and same-subject certificates with different keys.
+- Keeps validation fail closed for malformed, unsupported, or oversized PE certificate tables.
+- Preserves exact publisher, product name, minimum version, policy scope, and allow-rule validation.

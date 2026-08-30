@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Formats.Asn1;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -73,15 +72,27 @@ public sealed class WorkerPolicyInputIdentity
         {
             using var signer = new X509Certificate2(X509Certificate.CreateFromSignedFile(canonical));
             AddPublisherNames(signer, publishers);
-            AddTbsHashes(signer, signerTbsHashes);
             using var chain = new X509Chain();
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             chain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
             _ = chain.Build(signer);
-            foreach (var element in chain.ChainElements)
-                AddTbsHashes(element.Certificate, signerTbsHashes);
+            var verifiedChain = chain.ChainElements
+                .Select(element => element.Certificate)
+                .Prepend(signer)
+                .ToArray();
+            var embedded = AuthenticodeCertificateIdentity.ReadEmbeddedCertificates(canonical);
+            try
+            {
+                signerTbsHashes.UnionWith(
+                    AuthenticodeCertificateIdentity.CollectEquivalentSignerTbsHashes(verifiedChain, embedded));
+            }
+            finally
+            {
+                foreach (var certificate in embedded) certificate.Dispose();
+            }
         }
         catch (CryptographicException) { }
+        catch (InvalidDataException) { }
 
         return new WorkerPolicyInputIdentity(
             Path.GetFileName(canonical),
@@ -132,16 +143,6 @@ public sealed class WorkerPolicyInputIdentity
             var clean = Clean(value);
             if (clean is not null) publishers.Add(clean);
         }
-    }
-
-    private static void AddTbsHashes(X509Certificate2 certificate, ISet<string> hashes)
-    {
-        var certificateReader = new AsnReader(certificate.RawData, AsnEncodingRules.DER);
-        var certificateSequence = certificateReader.ReadSequence();
-        var tbsCertificate = certificateSequence.ReadEncodedValue().Span;
-        hashes.Add(Convert.ToHexString(SHA1.HashData(tbsCertificate)));
-        hashes.Add(Convert.ToHexString(SHA256.HashData(tbsCertificate)));
-        hashes.Add(Convert.ToHexString(SHA384.HashData(tbsCertificate)));
     }
 
     private static string Required(string value, string parameterName)
