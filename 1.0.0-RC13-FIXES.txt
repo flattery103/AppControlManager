@@ -1,0 +1,15 @@
+AppControl Manager 1.0.0-rc.13
+
+- Configures Windows Service Control Manager crash recovery for both the main agent
+  and the Local Service Rule Worker.
+- Restarts an unexpectedly terminated service after 10 seconds, then 30 seconds,
+  then 60 seconds, and resets the failure counter after 24 hours.
+- Applies the recovery contract during new installation, repair, manual
+  upgrade, managed agent update, and normal agent startup so existing RC12
+  endpoints are repaired automatically when RC13 starts.
+- Adds RC13-versioned health and disruptive recovery validators. Health mode
+  verifies the configured SCM actions; CrashRecovery mode proves the services
+  actually restart after forced termination.
+
+Security behavior is unchanged. A deliberate administrative service stop does
+not trigger automatic restart, and no Windows App Control policy is weakened.

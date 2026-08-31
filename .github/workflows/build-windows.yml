@@ -5,7 +5,7 @@ on:
       version:
         description: 'Agent/installer version to build'
         required: true
-        default: '1.0.0-rc.12'
+        default: '1.0.0-rc.13'
   push:
     paths:
       - 'windows-agent/**'
@@ -33,11 +33,11 @@ jobs:
         run: .\.github\tests\Test-AgentUninstall.ps1
       - name: Build self-contained x64 agent, update package and installer
         shell: powershell
-        run: .\windows-agent\Build.ps1 -Version "${{ github.event.inputs.version || '1.0.0-rc.12' }}"
+        run: .\windows-agent\Build.ps1 -Version "${{ github.event.inputs.version || '1.0.0-rc.13' }}"
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AppControlManager-${{ github.event.inputs.version || '1.0.0-rc.12' }}-Windows-x64
+          name: AppControlManager-${{ github.event.inputs.version || '1.0.0-rc.13' }}-Windows-x64
           path: |
             windows-agent/publish/**
             windows-agent/scripts/**

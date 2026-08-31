@@ -1,8 +1,12 @@
-# AppControl Manager 1.0.0-rc.12
+# AppControl Manager 1.0.0-rc.13
 
-## 1.0.0 Release Candidate 12
+## 1.0.0 Release Candidate 13
 
-Version 1.0.0-rc.12 adds live dashboard request refresh and tenant-scoped notifications that remain visible until viewed or dismissed. Revocation now removes all directly related primary and background supplemental application layers without crossing conflicting publishers or expanding through transitive paths. Device pages show only the newest 25 activity entries with a paginated full-history view, while the underlying history remains retained. Cross-signed FilePublisher generation removes unvalidated companion signers before publication. RC10 update staging, rollback, service recovery, and duplicate-activation protections remain intact.
+Version 1.0.0-rc.13 configures Windows Service Control Manager crash recovery for both endpoint services. Unexpected termination now triggers restarts after 10, 30, and 60 seconds, while deliberate administrative stops remain stopped. New installation, repair, manual upgrade, managed update, and normal startup all enforce the same configuration, so updating an existing RC12 endpoint repairs it automatically. RC12 live request notifications, complete revocation, activity pagination, and FilePublisher validation remain intact.
+
+Endpoint release validation is installed from `windows-agent/scripts/Test-AppControlManagerEndpoint-RC13-v1.ps1`. The versioned filename and console header prevent stale browser downloads from being mistaken for the current validator. Run its read-only `Health` mode for routine smoke testing or its safe `Functional` mode to restore stopped services and a missing interactive tray before repeating the same checks. See `docs/ENDPOINT-VALIDATION.md` for the normal directions and JSON report format.
+
+Disruptive recovery validation for a disposable test VM is available in `windows-agent/scripts/Test-AppControlManagerRecovery-RC13-v1.ps1`. It automates controlled service and tray recovery, forced-crash recovery, final endpoint health validation, and one-time post-reboot continuation. CrashRecovery requires `-IncludeReboot` so Windows clears the deliberately consumed SCM failure count. Safety gates prevent the test from starting during agent updates, installation mode, or background policy processing. See `docs/ENDPOINT-RECOVERY-VALIDATION.md`.
 
 This is a release-candidate build published as the GitHub Latest release for server-update discovery. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
@@ -89,7 +93,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.12`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.13`:
 
 ```text
 AZURE_CLIENT_ID

@@ -9,6 +9,12 @@ $publish=Join-Path $PSScriptRoot 'publish'
 $serviceExe=Join-Path $publish 'Service\AppControlManager.Service.exe'
 $trayExe=Join-Path $publish 'Tray\AppControlManager.Tray.exe'
 $ruleWorkerServiceName='AppControlManagerRuleWorker'
+function Set-ServiceCrashRecovery([string]$Name) {
+    & sc.exe failure $Name 'reset=' '86400' 'actions=' 'restart/10000/restart/30000/restart/60000' | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Could not configure crash recovery actions for $Name." }
+    & sc.exe failureflag $Name '1' | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Could not enable crash failure actions for $Name." }
+}
 if(!(Test-Path $serviceExe)){ throw 'Published binaries not found. Run .\Build.ps1 first or use the GitHub Actions artifact.' }
 if(!(Test-Path $trayExe)){ throw 'Published tray binary not found. Run .\Build.ps1 first or use the GitHub Actions artifact.' }
 if(-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){ throw 'Run this installer as Administrator.' }
@@ -38,6 +44,7 @@ if($existingWorker){ Stop-Service $ruleWorkerServiceName -Force -ErrorAction Sil
 $existing=Get-Service -Name AppControlManager -ErrorAction SilentlyContinue
 if($existing){ Stop-Service AppControlManager -Force -ErrorAction SilentlyContinue; sc.exe delete AppControlManager | Out-Null; Start-Sleep 1 }
 New-Service -Name AppControlManager -BinaryPathName '"C:\Program Files\AppControlManager\AppControlManager.Service.exe"' -DisplayName 'AppControl Manager Agent' -Description 'AppControl Manager application-control agent' -StartupType Automatic | Out-Null
+Set-ServiceCrashRecovery 'AppControlManager'
 Start-Service AppControlManager -ErrorAction Stop
 $workerDeadline=(Get-Date).AddSeconds(30)
 do {
@@ -48,5 +55,5 @@ do {
 if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager 1.0.0-rc.12 service and tray installed.' -ForegroundColor Green
+Write-Host 'AppControl Manager 1.0.0-rc.13 service and tray installed.' -ForegroundColor Green
 Write-Host 'No Windows App Control policy was enabled by this installer.' -ForegroundColor Yellow

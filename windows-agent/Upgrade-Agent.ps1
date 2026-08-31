@@ -7,6 +7,12 @@ $publish=Join-Path $PSScriptRoot 'publish'
 $serviceExe=Join-Path $publish 'Service\AppControlManager.Service.exe'
 $trayExe=Join-Path $publish 'Tray\AppControlManager.Tray.exe'
 $ruleWorkerServiceName='AppControlManagerRuleWorker'
+function Set-ServiceCrashRecovery([string]$Name) {
+    & sc.exe failure $Name 'reset=' '86400' 'actions=' 'restart/10000/restart/30000/restart/60000' | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Could not configure crash recovery actions for $Name." }
+    & sc.exe failureflag $Name '1' | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Could not enable crash failure actions for $Name." }
+}
 
 if(!(Test-Path $serviceExe)){ throw 'Published binaries not found. Run .\Build.ps1 first or use the GitHub Actions artifact.' }
 if(!(Test-Path $trayExe)){ throw 'Published tray binary not found. Run .\Build.ps1 first or use the GitHub Actions artifact.' }
@@ -23,14 +29,14 @@ $trustHelper=Join-Path $trustRoot 'New-SupplementalForFiles.ps1'
 $basePolicy=Join-Path $trustRoot 'Policies\BasePolicy.xml'
 $binaryList=@($serviceExe,$trayExe)
 $preauthPolicyId=$null
-Write-Host 'Preparing AppControl Manager 1.0.0-rc.12 binaries for the current enforcement policy...'
+Write-Host 'Preparing AppControl Manager 1.0.0-rc.13 binaries for the current enforcement policy...'
 if((Test-Path $trustHelper) -and (Test-Path $basePolicy)) {
     try {
-        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 1.0.0-rc.12 Core Binaries' -AsObject -AlreadyExpanded
+        $trustResult=& $trustHelper -FilePath $binaryList -Name 'AppControl Manager 1.0.0-rc.13 Core Binaries' -AsObject -AlreadyExpanded
         $preauthPolicyId=[string]$trustResult.policy_id
         Write-Host "Created supplemental allow policy for the new service/tray binaries: $preauthPolicyId" -ForegroundColor Green
     } catch {
-        throw "Could not pre-authorize the 1.0.0-rc.12 binaries: $($_.Exception.Message)"
+        throw "Could not pre-authorize the 1.0.0-rc.13 binaries: $($_.Exception.Message)"
     }
 }
 
@@ -58,7 +64,7 @@ foreach($grant in @('*S-1-5-18:(OI)(CI)(F)','*S-1-5-32-544:(OI)(CI)(F)','*S-1-5-
 }
 New-Item -ItemType Directory -Path "$programData\RuleWorker\Jobs" -Force | Out-Null
 if(-not [string]::IsNullOrWhiteSpace($preauthPolicyId)) {
-    [ordered]@{ version='1.0.0-rc.12'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
+    [ordered]@{ version='1.0.0-rc.13'; preauth_policy_id=$preauthPolicyId } | ConvertTo-Json | Set-Content -LiteralPath "$programData\Updates\current-update.json" -Encoding UTF8
 }
 
 Copy-Item "$PSScriptRoot\scripts\*.ps1" "$programFiles\Scripts\" -Force
@@ -75,6 +81,7 @@ if(Get-Service AppGuardPOC -ErrorAction SilentlyContinue) {
 if(!(Get-Service AppControlManager -ErrorAction SilentlyContinue)) {
     New-Service -Name AppControlManager -BinaryPathName '"C:\Program Files\AppControlManager\AppControlManager.Service.exe"' -DisplayName 'AppControl Manager Agent' -Description 'AppControl Manager application-control agent' -StartupType Automatic | Out-Null
 }
+Set-ServiceCrashRecovery 'AppControlManager'
 
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppGuardTray' -ErrorAction SilentlyContinue
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
@@ -87,6 +94,6 @@ do {
 } while((Get-Date) -lt $workerDeadline)
 if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager endpoint upgraded to 1.0.0-rc.12.' -ForegroundColor Green
+Write-Host 'AppControl Manager endpoint upgraded to 1.0.0-rc.13.' -ForegroundColor Green
 Write-Host 'Enrollment, state, learned data, block cache, logs and installed Windows App Control policies were preserved.'
 Write-Host 'Legacy AppGuardPOC folders were retained for rollback but are no longer used.' -ForegroundColor Yellow

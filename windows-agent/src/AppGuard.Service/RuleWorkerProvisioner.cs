@@ -39,6 +39,8 @@ internal static class RuleWorkerProvisioner
             RunRequired("sc.exe", "config", ServiceName, "binPath=", binPath, "start=", "auto", "obj=", LocalServiceAccount, "DisplayName=", DisplayName);
         }
         _ = Run("sc.exe", "description", ServiceName, "AppControl Manager generation-only ConfigCI worker running as Local Service");
+        ConfigureCrashRecovery(ServiceName);
+        ConfigureCrashRecovery("AppControlManager");
         var after = Run("sc.exe", "query", ServiceName);
         if (!after.Stdout.Contains("RUNNING", StringComparison.OrdinalIgnoreCase))
         {
@@ -46,6 +48,19 @@ internal static class RuleWorkerProvisioner
             if (start.ExitCode != 0 && !start.Stdout.Contains("1056", StringComparison.OrdinalIgnoreCase) && !start.Stderr.Contains("1056", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Could not start {ServiceName}: {start.Stderr} {start.Stdout}".Trim());
         }
+    }
+
+    private static void ConfigureCrashRecovery(string serviceName)
+    {
+        RunRequired(
+            "sc.exe",
+            "failure",
+            serviceName,
+            "reset=",
+            "86400",
+            "actions=",
+            "restart/10000/restart/30000/restart/60000");
+        RunRequired("sc.exe", "failureflag", serviceName, "1");
     }
 
     internal static void EnsureRunning()

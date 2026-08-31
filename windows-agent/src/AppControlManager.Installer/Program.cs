@@ -12,7 +12,7 @@ internal static class Program
 {
     private static readonly string Version = typeof(Program).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.12";
+        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.13";
 
     [STAThread]
     static void Main(string[] args)
@@ -280,6 +280,13 @@ internal static class Program
             if(!ServiceExists("AppControlManager"))
                 Run("sc.exe",$"create AppControlManager binPath= \"{Path.Combine(ProgramFilesRoot,"AppControlManager.Service.exe")}\" start= auto DisplayName= \"AppControl Manager Agent\"");
             Run("sc.exe","description AppControlManager \"AppControl Manager application-control agent\"");
+            ConfigureServiceCrashRecovery("AppControlManager");
+        }
+
+        private static void ConfigureServiceCrashRecovery(string serviceName)
+        {
+            Run("sc.exe",$"failure {serviceName} reset= 86400 actions= restart/10000/restart/30000/restart/60000");
+            Run("sc.exe",$"failureflag {serviceName} 1");
         }
 
         private static void RegisterTrayStartup()

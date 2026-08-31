@@ -1,16 +1,21 @@
-# AppControl Manager 1.0.0-rc.12 Acceptance Checklist
+# AppControl Manager 1.0.0-rc.13 Acceptance Checklist
 
 ## Server and release
 
 - [ ] Database migration completes without data loss.
 - [ ] Backup and restore are proven on a nonproduction copy.
-- [ ] Server health reports `1.0.0-rc.12`.
+- [ ] Server health reports `1.0.0-rc.13`.
 - [ ] Main and tag Windows builds pass.
 - [ ] The GitHub release is marked Latest (not prerelease) and contains all signed assets.
 
 ## Endpoint update and health
 
-- [ ] Automatic update completes from 0.18.3 with rollback protection.
+- [ ] `Test-AppControlManagerEndpoint-RC13-v1.ps1 -Mode Health` completes without failures.
+- [ ] `Test-AppControlManagerEndpoint-RC13-v1.ps1 -Mode Functional` recovers a safely stopped test service/tray and completes without failures.
+- [ ] `Test-AppControlManagerRecovery-RC13-v1.ps1 -Mode Recovery` passes on a disposable VM.
+- [ ] `Test-AppControlManagerRecovery-RC13-v1.ps1 -Mode CrashRecovery -IncludeReboot` confirms both services restart automatically after forced termination and clears the test-induced failure count.
+- [ ] The recovery validator's `-IncludeReboot` continuation completes after interactive logon.
+- [ ] Automatic update completes from 1.0.0-rc.12 with rollback protection.
 - [ ] Service, tray, and Rule Worker report healthy after reboot.
 - [ ] Windows binaries report FileVersion `1.0.0.0` and valid signatures.
 - [ ] Paused and resumed group rollout behavior is verified.
