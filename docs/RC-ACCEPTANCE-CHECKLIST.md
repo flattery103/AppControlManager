@@ -1,12 +1,12 @@
-# AppControl Manager 1.0.0-rc.9 Acceptance Checklist
+# AppControl Manager 1.0.0-rc.10 Acceptance Checklist
 
 ## Server and release
 
 - [ ] Database migration completes without data loss.
 - [ ] Backup and restore are proven on a nonproduction copy.
-- [ ] Server health reports `1.0.0-rc.9`.
+- [ ] Server health reports `1.0.0-rc.10`.
 - [ ] Main and tag Windows builds pass.
-- [ ] The GitHub release is marked prerelease and contains all signed assets.
+- [ ] The GitHub release is marked Latest (not prerelease) and contains all signed assets.
 
 ## Endpoint update and health
 
@@ -14,6 +14,8 @@
 - [ ] Service, tray, and Rule Worker report healthy after reboot.
 - [ ] Windows binaries report FileVersion `1.0.0.0` and valid signatures.
 - [ ] Paused and resumed group rollout behavior is verified.
+- [ ] A second assignment is not created while update activation is in progress.
+- [ ] The documented endpoint service recovery procedure restores both services.
 
 ## Learning and Enforcement
 

@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.9")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.10")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -1262,6 +1262,13 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
         conn.execute("UPDATE devices SET desired_agent_version=NULL WHERE id=?",(device_id,))
         return
     desired=release['version']; current=device['agent_version'] or ''; previous_desired=device['desired_agent_version']
+    if current:
+        # The running binary is authoritative proof that activation for this exact target finished,
+        # even if deployment targeting changed while the detached helper was working.
+        conn.execute(
+            "UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status='installing'",
+            (utcnow(),device_id,current),
+        )
     if current==desired:
         conn.execute("UPDATE devices SET desired_agent_version=?,update_status='current',update_result=NULL,last_update_at=COALESCE(last_update_at,?) WHERE id=?",(desired,utcnow(),device_id))
         conn.execute("UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status IN ('queued','installing')",(utcnow(),device_id,desired))
@@ -1289,6 +1296,15 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
         # Heartbeats can continue to report the local staging file after a failed command.
         # The immutable release history is the retry latch, preventing an endless loop.
         conn.execute("UPDATE devices SET update_status='failed',update_result=? WHERE id=?",(f'Agent {desired} failed; administrator intervention or a newer release is required.',device_id))
+        return
+    update_in_activation=conn.execute(
+        "SELECT id,target_version FROM agent_update_history WHERE device_id=? AND status='installing' ORDER BY id DESC LIMIT 1",
+        (device_id,)
+    ).fetchone()
+    if update_in_activation:
+        # Command completion means the detached activation helper was launched, not that installation
+        # completed. Keep this durable latch until the endpoint reports installed, failed, or rolled back.
+        conn.execute("UPDATE devices SET update_status='installing',update_result=? WHERE id=?",(f"Agent {update_in_activation['target_version']} activation is in progress.",device_id))
         return
     if not version_at_least(current,SELF_UPDATE_MIN_VERSION):
         conn.execute("UPDATE devices SET update_status='bootstrap_required',update_result=? WHERE id=?",(f'Manually install {SELF_UPDATE_MIN_VERSION} or later once to enable managed self-update.',device_id))
@@ -1715,7 +1731,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.9</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.10</div></aside>"
     )
 
 
@@ -2113,7 +2129,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.9"}
+    return {"ok": True, "version": "1.0.0-rc.10"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)

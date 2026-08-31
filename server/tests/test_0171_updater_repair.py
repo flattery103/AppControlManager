@@ -164,6 +164,25 @@ class Release0171UpdaterRepairTests(unittest.TestCase):
         catch = success[success.index("catch (Exception ex)"):success.index("WriteCurrent")]
         self.assertIn("return;", catch)
 
+    def test_each_update_command_has_an_isolated_staging_directory(self):
+        updater = self.read("windows-agent/src/AppGuard.Service/AgentUpdater.cs")
+
+        self.assertIn('Path.Combine(AppGuardPaths.UpdateDirectory, targetVersion, commandId.ToString())', updater)
+
+    def test_rollback_accepts_release_candidate_versions(self):
+        activation = self.read("windows-agent/scripts/Apply-AgentUpdate.ps1")
+
+        self.assertNotIn("([version]$CurrentVersion)", activation)
+        self.assertIn("function Test-UsesRuleWorker", activation)
+        self.assertIn("Test-UsesRuleWorker $CurrentVersion", activation)
+
+    def test_activation_failure_makes_a_final_service_recovery_attempt(self):
+        activation = self.read("windows-agent/scripts/Apply-AgentUpdate.ps1")
+
+        self.assertIn("function Start-InstalledServicesBestEffort", activation)
+        rollback_failure = activation[activation.index("catch {", activation.index("$failure=$_.Exception.Message")):]
+        self.assertIn("Start-InstalledServicesBestEffort", rollback_failure)
+
     def test_installer_persists_cleanup_record_atomically_before_service_stop(self):
         installer = self.read(
             "windows-agent/src/AppControlManager.Installer/Program.cs"

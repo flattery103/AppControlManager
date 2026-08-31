@@ -93,6 +93,26 @@ function Get-ServiceDiagnostic([string]$Name) {
         return "service=$Name diagnostic_error=$($_.Exception.Message)"
     }
 }
+function Test-UsesRuleWorker([string]$Version) {
+    $numeric=($Version.Trim() -replace '^v','' -replace '-.*$','')
+    $parsed=$null
+    if(-not [version]::TryParse($numeric,[ref]$parsed)){ return $true }
+    return $parsed -ge ([version]'0.16.5')
+}
+function Start-InstalledServicesBestEffort {
+    $messages=@()
+    foreach($name in @($serviceName,$ruleWorkerServiceName)) {
+        try {
+            $service=Get-Service -Name $name -ErrorAction Stop
+            Set-Service -Name $name -StartupType Automatic -ErrorAction Stop
+            if($service.Status -ne 'Running'){ Start-Service -Name $name -ErrorAction Stop }
+            $messages += "service=$name recovery=started"
+        } catch {
+            $messages += "service=$name recovery=failed error=$($_.Exception.Message)"
+        }
+    }
+    return ($messages -join '; ')
+}
 function Prepare-RollbackBackup {
     $stagedService=Join-Path $StagingPath 'Service\AppControlManager.Service.exe'
     $stagedTray=Join-Path $StagingPath 'Tray\AppControlManager.Tray.exe'
@@ -160,7 +180,7 @@ catch {
         if(!(Test-Path -LiteralPath $saved -PathType Container)){ throw 'The validated rollback backup is no longer available.' }
         Remove-Item -LiteralPath $programFiles -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item -LiteralPath $saved -Destination $programFiles -Recurse -Force
-        if(([version]$CurrentVersion) -ge ([version]'0.16.5')) {
+        if(Test-UsesRuleWorker $CurrentVersion) {
             try { Start-Service -Name $serviceName -ErrorAction Stop }
             catch { throw "Rollback AppControl Manager service could not start: $(Get-ServiceDiagnostic $serviceName) / $($_.Exception.Message)" }
             $rollbackOk=(Wait-ServiceStable $serviceName 25) -and (Wait-ServiceStable $ruleWorkerServiceName 20)
@@ -176,9 +196,12 @@ catch {
             exit 2
         }
         $rollbackServices="$(Get-ServiceDiagnostic $serviceName); $(Get-ServiceDiagnostic $ruleWorkerServiceName)"
-        Write-UpdateStatus 'failed' "Update to $TargetVersion failed and rollback service startup also failed: $failure / $rollbackServices" $backup
+        $recovery=Start-InstalledServicesBestEffort
+        Write-UpdateStatus 'failed' "Update to $TargetVersion failed and rollback service startup also failed: $failure / $rollbackServices / final recovery: $recovery" $backup
     } catch {
-        Write-UpdateStatus 'failed' "Update to $TargetVersion failed and rollback failed: $failure / $($_.Exception.Message)" $backup
+        $rollbackFailure=$_.Exception.Message
+        $recovery=Start-InstalledServicesBestEffort
+        Write-UpdateStatus 'failed' "Update to $TargetVersion failed and rollback failed: $failure / $rollbackFailure / final recovery: $recovery" $backup
     }
     exit 1
 }

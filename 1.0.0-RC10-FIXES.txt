@@ -1,0 +1,7 @@
+AppControl Manager 1.0.0-rc.10
+
+- Prevents a duplicate managed-update command while the first command's detached activation helper is still installing the release.
+- Uses a command-specific staging directory so another assignment cannot remove files used by an active helper.
+- Accepts release-candidate version strings during rollback decisions.
+- Makes a final best-effort attempt to start the main service and Rule Worker if normal rollback fails.
+- Adds a documented production recovery process for stopped endpoint services.

@@ -84,7 +84,9 @@ public sealed class AgentUpdater
         if (string.IsNullOrWhiteSpace(sha256)) throw new InvalidOperationException("Update package SHA256 was empty.");
         if (string.IsNullOrWhiteSpace(downloadPath)) throw new InvalidOperationException("Update package download path was empty.");
 
-        var root = Path.Combine(AppGuardPaths.UpdateDirectory, targetVersion);
+        // A command-scoped directory prevents a later assignment from deleting files that a
+        // detached activation helper is still consuming.
+        var root = Path.Combine(AppGuardPaths.UpdateDirectory, targetVersion, commandId.ToString());
         var package = Path.Combine(root, "agent-package.zip");
         var staging = Path.Combine(root, "staging");
         if (Directory.Exists(root)) Directory.Delete(root, true);
