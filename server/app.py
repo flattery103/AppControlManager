@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.11")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.12")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -380,6 +380,15 @@ def init_db():
                 completed_at TEXT,
                 UNIQUE(device_id,request_id,policy_id)
             );
+            CREATE TABLE IF NOT EXISTS approval_notification_acknowledgements (
+                user_id INTEGER NOT NULL,
+                request_id INTEGER NOT NULL,
+                acknowledged_at TEXT NOT NULL,
+                action TEXT NOT NULL,
+                PRIMARY KEY(user_id,request_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_approval_notification_request
+                ON approval_notification_acknowledgements(request_id,user_id);
             CREATE TABLE IF NOT EXISTS blocked_applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id TEXT NOT NULL,
@@ -690,6 +699,52 @@ def visible_device_clause(principal: Principal, alias: str = 'd'):
     if principal.role == 'global_admin':
         return '1=1', []
     return f'{alias}.organization_id=?', [principal.organization_id]
+
+
+def pending_request_notification(conn: sqlite3.Connection, principal: Principal):
+    """Return the newest visible pending request that this user has not acknowledged."""
+    clause, params = visible_device_clause(principal, 'd')
+    row = conn.execute(
+        f"""SELECT r.id,r.product_name,r.file_path,r.created_at,d.hostname,d.organization_id
+            FROM approval_requests r
+            JOIN devices d ON d.id=r.device_id
+            WHERE {clause}
+              AND r.status='pending'
+              AND NOT EXISTS (
+                  SELECT 1 FROM approval_notification_acknowledgements a
+                  WHERE a.user_id=? AND a.request_id=r.id
+              )
+            ORDER BY r.id DESC LIMIT 1""",
+        params + [principal.id],
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def acknowledge_request_notification(
+    conn: sqlite3.Connection,
+    principal: Principal,
+    request_id: int,
+    action: str,
+) -> bool:
+    if action not in {'dismissed', 'viewed'}:
+        raise HTTPException(status_code=400, detail='Notification action is invalid.')
+    clause, params = visible_device_clause(principal, 'd')
+    visible = conn.execute(
+        f"""SELECT r.id FROM approval_requests r
+            JOIN devices d ON d.id=r.device_id
+            WHERE {clause} AND r.id=?""",
+        params + [request_id],
+    ).fetchone()
+    if not visible:
+        raise HTTPException(status_code=404, detail='Approval request not found.')
+    conn.execute(
+        """INSERT INTO approval_notification_acknowledgements
+           (user_id,request_id,acknowledged_at,action) VALUES(?,?,?,?)
+           ON CONFLICT(user_id,request_id) DO UPDATE SET
+             acknowledged_at=excluded.acknowledged_at,action=excluded.action""",
+        (principal.id, request_id, utcnow(), action),
+    )
+    return True
 
 
 def policy_scope_label(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
@@ -1269,16 +1324,6 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
             "UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status='installing'",
             (utcnow(),device_id,current),
         )
-        stale_activations=conn.execute(
-            "SELECT id,target_version FROM agent_update_history WHERE device_id=? AND status='installing' AND target_version<>?",
-            (device_id,current),
-        ).fetchall()
-        for stale in stale_activations:
-            if version_at_least(current,stale['target_version']):
-                conn.execute(
-                    "UPDATE agent_update_history SET status='canceled',completed_at=?,detail=? WHERE id=?",
-                    (utcnow(),f"Superseded after endpoint reported newer installed version {current}.",stale['id']),
-                )
     if current==desired:
         conn.execute("UPDATE devices SET desired_agent_version=?,update_status='current',update_result=NULL,last_update_at=COALESCE(last_update_at,?) WHERE id=?",(desired,utcnow(),device_id))
         conn.execute("UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status IN ('queued','installing')",(utcnow(),device_id,desired))
@@ -1673,6 +1718,33 @@ def admin_auth(request: Request) -> Principal:
         return Principal(row['id'], row['username'], row['display_name'] or row['username'], row['role'], row['organization_id'], bool(row['force_password_change']))
 
 
+@app.get('/api/pending-request-notification')
+def pending_request_notification_api(principal: Principal = Depends(admin_auth)):
+    with db() as conn:
+        notice = pending_request_notification(conn, principal)
+    if not notice:
+        return {'notification': None}
+    label = notice['product_name'] or ntpath.basename(notice['file_path'] or '') or 'Application request'
+    return {'notification': {
+        'id': notice['id'],
+        'label': label,
+        'device': notice['hostname'],
+        'created_at': notice['created_at'],
+        'url': f"/requests/{notice['id']}",
+    }}
+
+
+@app.post('/admin/api/pending-request-notification/{request_id}/ack')
+def acknowledge_request_notification_api(
+    request_id: int,
+    action: str = Form(...),
+    principal: Principal = Depends(admin_auth),
+):
+    with db() as conn:
+        acknowledge_request_notification(conn, principal, request_id, action)
+    return {'acknowledged': True}
+
+
 @app.get('/api/policy-explanation')
 def policy_explanation_api(device_id:str, file_path:Optional[str]=None, sha256:Optional[str]=None,
                            request_id:Optional[int]=None, application_id:Optional[int]=None,
@@ -1741,7 +1813,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.11</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.12</div></aside>"
     )
 
 
@@ -1792,6 +1864,7 @@ button,.button{{padding:8px 12px;border:1px solid #b8c1cd;border-radius:7px;back
 input,select,textarea{{padding:8px 10px;border:1px solid #cbd3df;border-radius:7px;min-width:180px;background:white;color:#182230}} input:focus,select:focus,textarea:focus{{outline:0;border-color:#7c9cf0;box-shadow:0 0 0 3px rgba(36,87,214,.09)}} label{{font-size:12px;font-weight:700;color:#475467}} .field{{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}}
 code{{font-size:12px;word-break:break-all}} .muted{{color:#667085;font-size:12px}} .badge{{display:inline-block;padding:4px 8px;border-radius:999px;background:#e9edf3;color:#475467;font-size:11px;font-weight:750;white-space:nowrap}} .badge-ok{{background:#dcfae6;color:#067647}} .badge-bad{{background:#fee4e2;color:#b42318}} .badge-warn{{background:#fef0c7;color:#b54708}} .badge-info{{background:#e8f0ff;color:#2457d6}}
 .actions{{display:flex;gap:7px;flex-wrap:wrap;align-items:center}} .copy-wrap{{display:flex;align-items:center;gap:7px;min-width:0}} .copy-wrap code{{display:block;max-width:640px;padding:7px 9px;background:#f7f9fb;border:1px solid #e1e6ed;border-radius:6px;word-break:break-all}} .copy-btn{{padding:6px 9px;font-size:12px;white-space:nowrap}} .notice,.notice-warn{{background:#fff7e6;border:1px solid #fedf89;padding:12px 14px;border-radius:8px;margin-bottom:18px}} .notice-info{{background:#eff6ff;border:1px solid #bfdbfe;padding:12px 14px;border-radius:8px;margin-bottom:18px;color:#1e40af}}
+.request-notice{{position:fixed;right:22px;top:88px;z-index:60;width:min(430px,calc(100vw - 44px));background:#fff;border:1px solid #9ab2ee;border-left:5px solid var(--primary);border-radius:10px;box-shadow:0 18px 42px rgba(16,24,40,.2);padding:14px 15px}} .request-notice[hidden]{{display:none}} .request-notice-title{{font-weight:800;margin-bottom:4px}} .request-notice-actions{{display:flex;gap:8px;margin-top:11px}}
 .scope-select{{min-width:145px}} .section-head{{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:28px 0 10px}} .section-head h2{{margin:0}}
 .filters{{display:flex;flex-wrap:wrap;gap:10px;align-items:end;background:white;border:1px solid var(--border);border-radius:10px;padding:13px;margin-bottom:16px}} .filters .field{{margin:0}} .filters input,.filters select{{min-width:145px}}
 .pagination{{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 13px;background:white;border:1px solid var(--border);border-radius:9px;margin:12px 0 22px}} .pagination .pages{{display:flex;gap:6px}}
@@ -1812,7 +1885,33 @@ function acmCopy(id,button){{
   const fallback=()=>{{ const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.focus(); ta.select(); try{{document.execCommand('copy');done();}}finally{{document.body.removeChild(ta);}} }};
   if(navigator.clipboard && window.isSecureContext){{navigator.clipboard.writeText(text).then(done).catch(fallback);}}else{{fallback();}}
 }}
-</script></head><body class='{shell_class}'>{side}<div class='workspace'>{("<div class='topbar'>"+search+account+"</div>") if principal else ''}<main>{heading}{body}</main></div></body></html>""")
+async function acmAcknowledgeRequest(id,action){{
+  const data=new URLSearchParams(); data.set('action',action);
+  await fetch('/admin/api/pending-request-notification/'+id+'/ack',{{method:'POST',body:data,credentials:'same-origin',keepalive:true}});
+}}
+async function acmPollPendingRequests(){{
+  const banner=document.getElementById('acm-request-notice'); if(!banner) return;
+  try{{
+    const response=await fetch('/api/pending-request-notification',{{credentials:'same-origin',cache:'no-store'}});
+    if(!response.ok) return;
+    const notice=(await response.json()).notification;
+    if(!notice){{banner.hidden=true;return;}}
+    banner.dataset.requestId=notice.id;
+    banner.querySelector('[data-notice-title]').textContent='New approval request: '+notice.label;
+    banner.querySelector('[data-notice-detail]').textContent='Device: '+notice.device;
+    const view=banner.querySelector('[data-notice-view]'); view.href=notice.url;
+    view.onclick=()=>{{void acmAcknowledgeRequest(notice.id,'viewed');}};
+    banner.hidden=false;
+  }}catch(_){{}}
+}}
+document.addEventListener('DOMContentLoaded',()=>{{
+  const banner=document.getElementById('acm-request-notice');
+  if(banner) banner.querySelector('[data-notice-dismiss]').addEventListener('click',async()=>{{
+    const id=banner.dataset.requestId; if(id) await acmAcknowledgeRequest(id,'dismissed'); banner.hidden=true;
+  }});
+  void acmPollPendingRequests(); setInterval(acmPollPendingRequests,10000);
+}});
+</script></head><body class='{shell_class}'>{side}{("<div id='acm-request-notice' class='request-notice' hidden><div class='request-notice-title' data-notice-title></div><div class='muted' data-notice-detail></div><div class='request-notice-actions'><a class='button btn-primary' data-notice-view href='/requests'>View request</a><button type='button' data-notice-dismiss>Dismiss</button></div></div>") if principal else ''}<div class='workspace'>{("<div class='topbar'>"+search+account+"</div>") if principal else ''}<main>{heading}{body}</main></div></body></html>""")
 
 
 def display_mode(row: sqlite3.Row) -> str:
@@ -2139,7 +2238,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.11"}
+    return {"ok": True, "version": "1.0.0-rc.12"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -3406,6 +3505,43 @@ def report_page(report_type:str,period:int=30,organization_id:str='',device_id:s
     return page(report['title'],render_report(report,filters,actions),principal,subtitle=report['description'],actions=actions)
 
 
+def dashboard_pending_requests_html(conn: sqlite3.Connection, principal: Principal) -> tuple[int, str]:
+    clause, params = visible_device_clause(principal, 'd')
+    pending = conn.execute(f"""SELECT r.*,d.hostname,d.organization_id,d.group_id,o.name organization_name
+        FROM approval_requests r JOIN devices d ON d.id=r.device_id
+        LEFT JOIN organizations o ON o.id=d.organization_id
+        WHERE {clause} AND r.status='pending' ORDER BY r.id DESC LIMIT 8""", params).fetchall()
+    installations = conn.execute(f"""SELECT i.*,d.hostname,d.organization_id,d.group_id,o.name organization_name
+        FROM installation_requests i JOIN devices d ON d.id=i.device_id
+        LEFT JOIN organizations o ON o.id=d.organization_id
+        WHERE {clause} AND i.status='pending' ORDER BY i.id DESC LIMIT 8""", params).fetchall()
+    access_count = conn.execute(f"""SELECT COUNT(*) n FROM approval_requests r JOIN devices d ON d.id=r.device_id
+        WHERE {clause} AND r.status='pending'""", params).fetchone()['n']
+    installation_count = conn.execute(f"""SELECT COUNT(*) n FROM installation_requests i JOIN devices d ON d.id=i.device_id
+        WHERE {clause} AND i.status='pending'""", params).fetchone()['n']
+    items = []
+    for row in pending:
+        actions = request_actions(conn, principal, row)
+        count = row['component_count'] or 1
+        related = f" <span class='muted'>(+{count-1} related)</span>" if count > 1 else ''
+        html = f"<tr><td>{app_cell(row['product_name'],row['file_path'],'/requests/%s' % row['id'])}{related}</td><td><span class='badge'>Access</span></td><td><a href='/devices/{row['device_id']}'>{escape(row['hostname'])}</a></td><td>{escape(row['requested_by'] or '')}</td><td class='nowrap'>{display_time(row['created_at'])}</td><td><span class='clip'>{escape(row['reason'] or '')}</span></td><td>{actions}</td></tr>"
+        items.append((row['created_at'] or '', html))
+    for row in installations:
+        actions = installation_request_actions(principal, row)
+        html = f"<tr><td>{app_cell(row['product_name'],row['file_path'])}</td><td><span class='badge badge-info'>Installation</span></td><td><a href='/devices/{row['device_id']}'>{escape(row['hostname'])}</a></td><td>{escape(row['requested_by'] or 'Administrator')}</td><td class='nowrap'>{display_time(row['created_at'])}</td><td><span class='clip'>{escape(row['reason'] or '')}</span></td><td>{actions}</td></tr>"
+        items.append((row['created_at'] or '', html))
+    rows = [html for _, html in sorted(items, key=lambda item: item[0], reverse=True)[:8]]
+    table = f"<table><tr><th>Application</th><th>Type</th><th>Device</th><th>Requested By</th><th>Requested</th><th>Reason</th><th>Action / Scope</th></tr>{''.join(rows) or '<tr><td colspan=7><div class=\"empty\">No pending requests.</div></td></tr>'}</table>"
+    return access_count + installation_count, table
+
+
+@app.get('/api/dashboard/pending-requests', response_class=HTMLResponse)
+def dashboard_pending_requests(principal: Principal = Depends(admin_auth)):
+    with db() as conn:
+        count, table = dashboard_pending_requests_html(conn, principal)
+    return HTMLResponse(f"<div data-pending-count='{count}'>{table}</div>")
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
     with db() as conn:
@@ -3471,7 +3607,7 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
     policy_total=allow_count+block_count
     body=f"""{notice}<div class='grid'>
       <div class='stat'><span class='stat-label'>Managed Devices</span><b>{device_count}</b><span class='trend'>{online_count} online now</span></div>
-      <div class='stat'><span class='stat-label'>Pending Approvals</span><b>{pending_count}</b><span class='trend'>Administrator action required</span></div>
+      <div class='stat' data-dashboard-pending-stat><span class='stat-label'>Pending Approvals</span><b>{pending_count}</b><span class='trend'>Administrator action required</span></div>
       <div class='stat'><span class='stat-label'>Blocked Events / 24h</span><b>{blocks_24h}</b><span class='trend'>{blocks_7d} during the last 7 days</span></div>
       <div class='stat'><span class='stat-label'>Devices Pending Update</span><b>{update_attention}</b><span class='trend'>Not yet at desired agent version</span></div>
       <div class='stat'><span class='stat-label'>Active Policies</span><b>{policy_total}</b><span class='trend'>{allow_count} allow · {block_count} block</span></div>
@@ -3479,7 +3615,8 @@ def dashboard(busy: int = 0, principal: Principal = Depends(admin_auth)):
     </div>
     <datalist id='installation-durations'><option value='15'><option value='30'><option value='60'></datalist>
     <div class='section-head'><h2>Pending Requests</h2><a href='/requests'>View all requests →</a></div>
-    <div class='card'><table><tr><th>Application</th><th>Type</th><th>Device</th><th>Requested By</th><th>Requested</th><th>Reason</th><th>Action / Scope</th></tr>{''.join(req_rows) or '<tr><td colspan=7><div class="empty">No pending requests.</div></td></tr>'}</table></div>
+    <div class='card' data-live-pending-requests><table><tr><th>Application</th><th>Type</th><th>Device</th><th>Requested By</th><th>Requested</th><th>Reason</th><th>Action / Scope</th></tr>{''.join(req_rows) or '<tr><td colspan=7><div class="empty">No pending requests.</div></td></tr>'}</table></div>
+    <script>(function(){{async function refreshDashboardRequests(){{try{{const response=await fetch('/api/dashboard/pending-requests',{{credentials:'same-origin',cache:'no-store'}});if(!response.ok)return;const wrapper=document.createElement('div');wrapper.innerHTML=await response.text();const payload=wrapper.firstElementChild;const target=document.querySelector('[data-live-pending-requests]');if(payload&&target)target.innerHTML=payload.innerHTML;const count=document.querySelector('[data-dashboard-pending-stat] b');if(count&&payload)count.textContent=payload.dataset.pendingCount||'0';}}catch(_){{}}}}setInterval(refreshDashboardRequests,10000);}})();</script>
     <div class='grid-2'>
       <div><div class='section-head'><h2>Operational Health</h2><a href='/reports/device-compliance'>Compliance report →</a></div><div class='panel'>
         <div class='metric-row'><span>Enforcement coverage</span><span class='metric-value'>{enforcement_pct}%</span></div><div class='progress success'><span style='width:{enforcement_pct}%'></span></div>
@@ -3730,19 +3867,6 @@ def request_detail(request_id:int, principal:Principal=Depends(admin_auth)):
     return page(f'Approval Request #{request_id}',body,principal,subtitle='Request details, decision history and captured application components.',actions="<a class='button' href='/requests'>Back to Requests</a><a class='button' href='/reports/approvals'>Decision Report</a>")
 
 
-def device_activity_rows(conn:sqlite3.Connection, device_id:str, limit:int, offset:int=0):
-    return conn.execute("""
-        SELECT activity_time,activity,detail,source_order,source_id FROM (
-          SELECT COALESCE(occurred_at,received_at) activity_time,
-                 CASE event_id WHEN 3077 THEN 'Blocked by App Control' WHEN 3076 THEN 'Observed / Audit' ELSE 'Event ' || event_id END activity,
-                 COALESCE(product_name,file_path,'') detail,1 source_order,id source_id FROM events WHERE device_id=?
-          UNION ALL SELECT created_at,'Approval request ' || status,COALESCE(product_name,file_path,''),2,id FROM approval_requests WHERE device_id=?
-          UNION ALL SELECT created_at,'Command ' || command_type || ' / ' || status,COALESCE(result,''),3,id FROM commands WHERE device_id=?
-          UNION ALL SELECT occurred_at,action,COALESCE(detail,''),4,id FROM audit_log WHERE device_id=?
-        ) ORDER BY activity_time DESC,source_order DESC,source_id DESC LIMIT ? OFFSET ?
-    """,(device_id,device_id,device_id,device_id,limit,offset)).fetchall()
-
-
 @app.get('/devices/{device_id}', response_class=HTMLResponse)
 def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     with db() as conn:
@@ -3753,9 +3877,10 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         approvals=conn.execute("SELECT * FROM approved_components WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         blocks=conn.execute("SELECT * FROM blocked_applications WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         requests=conn.execute("SELECT * FROM approval_requests WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
+        events=conn.execute("SELECT * FROM events WHERE device_id=? ORDER BY id DESC LIMIT 150",(device_id,)).fetchall()
         commands=conn.execute("SELECT * FROM commands WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         command_busy=any(c['status'] in {'pending','processing'} for c in commands)
-        timeline=device_activity_rows(conn,device_id,25)
+        audits=conn.execute("SELECT * FROM audit_log WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         _expire_installation_approvals(conn,device_id)
         installation=conn.execute("SELECT * FROM installation_requests WHERE device_id=? ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
         effective=[r for r in conn.execute("SELECT * FROM scoped_policies WHERE active=1 ORDER BY CASE action WHEN 'block' THEN 0 ELSE 1 END,id DESC").fetchall() if device_matches_policy_scope(conn,device_id,r)]
@@ -3763,6 +3888,11 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         for r in effective:
             cls='badge-bad' if r['action']=='block' else 'badge-ok'
             pol_rows.append(f"<tr><td><span class='badge {cls}'>{escape(r['action'].upper())}</span></td><td>{escape(r['name'])}</td><td>{escape(policy_scope_label(conn,r))}</td><td>{escape(r['publisher'] or '')}</td><td>{escape(r['product_name'] or '')}</td></tr>")
+    timeline=[]
+    for e in events[:80]: timeline.append((e['occurred_at'] or e['received_at'], 'Blocked by App Control' if e['event_id']==3077 else ('Observed / Audit' if e['event_id']==3076 else 'Event '+str(e['event_id'])), e['product_name'] or e['file_path'] or ''))
+    for r in requests[:50]: timeline.append((r['created_at'],'Approval request '+r['status'],r['product_name'] or r['file_path']))
+    for c in commands[:50]: timeline.append((c['created_at'],'Command '+c['command_type']+' / '+c['status'],c['result'] or ''))
+    for a in audits[:50]: timeline.append((a['occurred_at'],a['action'],a['detail'] or ''))
     timeline=sorted(timeline,key=lambda x:x[0] or '',reverse=True)[:25]
     group_form=''
     if principal.can_manage_org:
@@ -3771,7 +3901,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     appr=''.join(f"<tr><td>{escape(a['product_name'] or '')}</td><td><code>{escape(a['file_path'])}</code></td><td>{escape(a['rule_type'] or '')}</td><td>{escape(a['status'] or '')}</td><td>{escape(display_time(a['approved_at']))}</td></tr>" for a in approvals)
     blk=''.join(f"<tr><td>{escape(b['product_name'] or '')}</td><td><code>{escape(b['file_path'])}</code></td><td>{escape(b['status'])}</td><td>{escape(display_time(b['blocked_at'] or b['created_at']))}</td></tr>" for b in blocks)
     reqs=''.join(f"<tr><td><a href='/requests/{r['id']}'>{r['id']}</a></td><td>{escape(r['product_name'] or '')}</td><td>{escape(r['status'])}</td><td>{escape(r['requested_by'] or '')}</td><td>{escape(display_time(r['created_at']))}</td></tr>" for r in requests)
-    hist=''.join(f"<tr><td>{escape(display_time(row['activity_time']))}</td><td>{escape(row['activity'])}</td><td><code>{escape(row['detail'] or '')}</code></td></tr>" for row in timeline)
+    hist=''.join(f"<tr><td>{escape(display_time(t))}</td><td>{escape(k)}</td><td><code>{escape(v or '')}</code></td></tr>" for t,k,v in timeline)
     policies=''.join(pol_rows)
     with db() as conn:
         active_releases=conn.execute("SELECT * FROM agent_releases WHERE active=1 AND deleted_at IS NULL ORDER BY id DESC").fetchall()
@@ -3846,7 +3976,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     body=f"""<div class='grid'><div class='stat'><span class='stat-label'>Organization</span><b style='font-size:18px'>{escape(d['organization_name'] or '')}</b></div><div class='stat'><span class='stat-label'>Device Group</span><b style='font-size:18px'>{escape(d['group_name'] or 'None')}</b></div><div class='stat'><span class='stat-label'>App Control Mode</span><b style='font-size:18px'>{escape(mode_name)}</b></div><div class='stat'><span class='stat-label'>Agent Version</span><b style='font-size:18px'>{escape(d['agent_version'] or '')}</b></div></div>
 {jump}{control_panel}{background_panel}
 <div id='policies' class='section-head'><h2>Effective Scoped Policies</h2><a href='/reports/policies?device_id={quote(device_id)}'>Device Policy Report →</a></div><div class='card'><table><tr><th>Action</th><th>Application</th><th>Scope</th><th>Publisher</th><th>Product</th></tr>{policies or '<tr><td colspan=5><div class=empty>No active scoped policies apply to this device.</div></td></tr>'}</table></div>
-<div id='activity' class='section-head'><h2>Activity / History</h2><div class='actions'><a href='/devices/{device_id}/activity'>View All Activity →</a><a href='/reports/blocked-events?device_id={quote(device_id)}'>Blocked Event Report →</a></div></div><div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{hist or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>
+<div id='activity' class='section-head'><h2>Activity / History</h2><div class='actions'><a href='/devices/{quote(device_id)}/activity'>View all activity →</a><a href='/reports/blocked-events?device_id={quote(device_id)}'>Blocked Event Report →</a></div></div><div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{hist or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>
 <div id='approved-apps' class='section-head'><h2>Approved Applications</h2></div><div class='card'><table><tr><th>Product</th><th>File</th><th>Rule</th><th>Status</th><th>Approved</th></tr>{appr or '<tr><td colspan=5><div class=empty>No approvals.</div></td></tr>'}</table></div>
 <div id='blocked-apps' class='section-head'><h2>Blocked Applications</h2></div><div class='card'><table><tr><th>Product</th><th>File</th><th>Status</th><th>Blocked</th></tr>{blk or '<tr><td colspan=4><div class=empty>No explicit blocks.</div></td></tr>'}</table></div>
 <div id='requests' class='section-head'><h2>Approval Requests</h2><a href='/reports/approvals?device_id={quote(device_id)}'>Decision Report →</a></div><div class='card'><table><tr><th>ID</th><th>Product</th><th>Status</th><th>User</th><th>Created</th></tr>{reqs or '<tr><td colspan=5><div class=empty>No requests.</div></td></tr>'}</table></div>"""
@@ -3856,17 +3986,39 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
 
 
 @app.get('/devices/{device_id}/activity', response_class=HTMLResponse)
-def device_activity(device_id:str, page_num:int=Query(1,alias='page'), principal:Principal=Depends(admin_auth)):
-    page_num=max(1,page_num); page_size=50; offset=(page_num-1)*page_size
+def device_activity(device_id: str, page_num: int = Query(1, alias='page'), principal: Principal = Depends(admin_auth)):
+    page_num = max(1, page_num)
     with db() as conn:
-        device=conn.execute("SELECT * FROM devices WHERE id=?",(device_id,)).fetchone()
-        if not device: raise HTTPException(status_code=404,detail='Device not found')
-        require_org_access(principal,device['organization_id'])
-        total=sum(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE device_id=?",(device_id,)).fetchone()[0] for table in ('events','approval_requests','commands','audit_log'))
-        rows=device_activity_rows(conn,device_id,page_size,offset)
-    html=''.join(f"<tr><td>{escape(display_time(r['activity_time']))}</td><td>{escape(r['activity'])}</td><td><code>{escape(r['detail'] or '')}</code></td></tr>" for r in rows)
-    table=f"<div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{html or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>"
-    return page(f"{device['hostname']} Activity",table+pager(f'/devices/{device_id}/activity',page_num,total,{}),principal,subtitle=f'Complete retained device activity · {total} entries',actions=f"<a class='button' href='/devices/{device_id}'>Back to Device</a>")
+        device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+        if not device:
+            raise HTTPException(status_code=404, detail='Device not found')
+        require_org_access(principal, device['organization_id'])
+        activity_sql = """
+            SELECT COALESCE(occurred_at,received_at) activity_at,
+                   CASE event_id WHEN 3077 THEN 'Blocked by App Control'
+                                 WHEN 3076 THEN 'Observed / Audit'
+                                 ELSE 'Event ' || event_id END activity_kind,
+                   COALESCE(product_name,file_path,'') activity_detail
+            FROM events WHERE device_id=?
+            UNION ALL
+            SELECT created_at,'Approval request ' || status,COALESCE(product_name,file_path,'')
+            FROM approval_requests WHERE device_id=?
+            UNION ALL
+            SELECT created_at,'Command ' || command_type || ' / ' || status,COALESCE(result,'')
+            FROM commands WHERE device_id=?
+            UNION ALL
+            SELECT occurred_at,action,COALESCE(detail,'')
+            FROM audit_log WHERE device_id=?
+        """
+        activity_args = (device_id, device_id, device_id, device_id)
+        total = conn.execute(f"SELECT COUNT(*) n FROM ({activity_sql})", activity_args).fetchone()['n']
+        shown = conn.execute(
+            f"SELECT * FROM ({activity_sql}) ORDER BY activity_at DESC LIMIT ? OFFSET ?",
+            activity_args + (PAGE_SIZE, (page_num - 1) * PAGE_SIZE),
+        ).fetchall()
+    rows = ''.join(f"<tr><td>{escape(display_time(row['activity_at']))}</td><td>{escape(row['activity_kind'])}</td><td><code>{escape(row['activity_detail'] or '')}</code></td></tr>" for row in shown)
+    body = f"<div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{rows or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>{pager('/devices/' + quote(device_id) + '/activity', page_num, total, {})}"
+    return page('Device Activity', body, principal, subtitle=f"Complete retained activity for {device['hostname']}.", actions=f"<a class='button' href='/devices/{quote(device_id)}'>Back to Device</a>")
 
 
 
@@ -5068,6 +5220,91 @@ def normalize_policy_guid(value: Optional[str]) -> Optional[str]:
         return None
 
 
+def _normalized_windows_path(value: Optional[str]) -> str:
+    text = (value or '').strip().replace('/', '\\')
+    return ntpath.normcase(ntpath.normpath(text)) if text else ''
+
+
+def _request_revocation_identity(conn: sqlite3.Connection, request_id: int):
+    request = conn.execute("SELECT * FROM approval_requests WHERE id=?", (request_id,)).fetchone()
+    if not request:
+        return None
+    items = conn.execute(
+        "SELECT original_path,parent_path,publisher,product_name FROM approval_request_items WHERE request_id=?",
+        (request_id,),
+    ).fetchall()
+    paths = {_normalized_windows_path(request['file_path'])}
+    parents = set()
+    publishers = {str(request['publisher'] or '').strip().casefold()}
+    products = {str(request['product_name'] or '').strip().casefold()}
+    for item in items:
+        paths.add(_normalized_windows_path(item['original_path']))
+        parents.add(_normalized_windows_path(item['parent_path']))
+        publishers.add(str(item['publisher'] or '').strip().casefold())
+        products.add(str(item['product_name'] or '').strip().casefold())
+    return {
+        'request': request,
+        'paths': {value for value in paths if value},
+        'parents': {value for value in parents if value},
+        'publishers': {value for value in publishers if value},
+        'products': {value for value in products if value},
+    }
+
+
+def correlated_request_ids_for_revocation(
+    conn: sqlite3.Connection,
+    device_id: str,
+    seed_request_id: int,
+) -> list[int]:
+    """Find approvals directly related to the selected request without graph expansion."""
+    seed = _request_revocation_identity(conn, seed_request_id)
+    if not seed or seed['request']['device_id'] != device_id:
+        return []
+    active_ids = {
+        int(row[0]) for row in conn.execute(
+            """SELECT DISTINCT request_id FROM approved_components
+               WHERE device_id=? AND request_id IS NOT NULL
+                 AND status IN ('approved','blocked','revoking')""",
+            (device_id,),
+        ).fetchall()
+    }
+    active_ids.update(
+        int(row[0]) for row in conn.execute(
+            """SELECT DISTINCT request_id FROM approved_applications
+               WHERE device_id=? AND request_id IS NOT NULL
+                 AND status IN ('approved','revoking')""",
+            (device_id,),
+        ).fetchall()
+    )
+    active_ids.update(
+        int(row[0]) for row in conn.execute(
+            """SELECT DISTINCT request_id FROM approval_background_policies
+               WHERE device_id=? AND request_id IS NOT NULL
+                 AND status IN ('installed','revoking')""",
+            (device_id,),
+        ).fetchall()
+    )
+    active_ids.add(seed_request_id)
+
+    related = [seed_request_id]
+    for candidate_id in sorted(active_ids):
+        if candidate_id == seed_request_id:
+            continue
+        candidate = _request_revocation_identity(conn, candidate_id)
+        if not candidate:
+            continue
+        publishers_conflict = bool(seed['publishers'] and candidate['publishers']) and seed['publishers'].isdisjoint(candidate['publishers'])
+        if publishers_conflict:
+            continue
+        exact_path = bool(seed['paths'] & candidate['paths'])
+        direct_load = bool(seed['paths'] & candidate['parents'] or seed['parents'] & candidate['paths'])
+        if direct_load and not seed['publishers'] & candidate['publishers']:
+            direct_load = False
+        if exact_path or direct_load:
+            related.append(candidate_id)
+    return sorted(set(related))
+
+
 def linked_policy_ids_for_request(conn: sqlite3.Connection, device_id: str, request_id: int) -> list[str]:
     ids=set()
     queries=[
@@ -5083,19 +5320,35 @@ def linked_policy_ids_for_request(conn: sqlite3.Connection, device_id: str, requ
     return sorted(ids)
 
 
+def scoped_policy_request_targets(conn: sqlite3.Connection, policy_definition_id: int):
+    return conn.execute(
+        """SELECT DISTINCT device_id,request_id FROM (
+               SELECT device_id,request_id FROM approved_components
+               WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking')
+               UNION ALL
+               SELECT device_id,request_id FROM approved_applications
+               WHERE policy_definition_id=? AND status IN ('approved','revoking')
+               UNION ALL
+               SELECT device_id,request_id FROM approval_background_policies
+               WHERE policy_definition_id=? AND status IN ('installed','revoking')
+           ) WHERE request_id IS NOT NULL""",
+        (policy_definition_id, policy_definition_id, policy_definition_id),
+    ).fetchall()
+
+
 def queue_linked_policy_revocations(conn: sqlite3.Connection, device_id: str, request_id: int, actor: str, scoped_policy_id: Optional[int]=None) -> int:
-    policy_ids=linked_policy_ids_for_request(conn,device_id,request_id)
     queued=0
-    for policy_id in policy_ids:
-        duplicate=conn.execute("SELECT id FROM commands WHERE device_id=? AND command_type='revoke_approval' AND status IN ('pending','processing') AND payload LIKE ? LIMIT 1",(device_id,f'%{policy_id}%')).fetchone()
-        if duplicate: continue
-        payload={'policy_id':policy_id,'requested_by':actor,'request_id':request_id}
-        if scoped_policy_id is not None: payload['scoped_policy_id']=scoped_policy_id
-        conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'revoke_approval',json.dumps(payload),'pending',utcnow()))
-        conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status IN ('approved','blocked')",(device_id,request_id,policy_id))
-        conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='approved'",(device_id,request_id,policy_id))
-        conn.execute("UPDATE approval_background_policies SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='installed'",(device_id,request_id,policy_id))
-        queued+=1
+    for linked_request_id in correlated_request_ids_for_revocation(conn, device_id, request_id):
+        for policy_id in linked_policy_ids_for_request(conn,device_id,linked_request_id):
+            duplicate=conn.execute("SELECT id FROM commands WHERE device_id=? AND command_type='revoke_approval' AND status IN ('pending','processing') AND payload LIKE ? LIMIT 1",(device_id,f'%{policy_id}%')).fetchone()
+            if duplicate: continue
+            payload={'policy_id':policy_id,'requested_by':actor,'request_id':linked_request_id}
+            if scoped_policy_id is not None: payload['scoped_policy_id']=scoped_policy_id
+            conn.execute("INSERT INTO commands(device_id,command_type,payload,status,created_at) VALUES(?,?,?,?,?)",(device_id,'revoke_approval',json.dumps(payload),'pending',utcnow()))
+            conn.execute("UPDATE approved_components SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status IN ('approved','blocked')",(device_id,linked_request_id,policy_id))
+            conn.execute("UPDATE approved_applications SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='approved'",(device_id,linked_request_id,policy_id))
+            conn.execute("UPDATE approval_background_policies SET status='revoking' WHERE device_id=? AND request_id=? AND upper(replace(replace(policy_id,'{',''),'}',''))=upper(?) AND status='installed'",(device_id,linked_request_id,policy_id))
+            queued+=1
     return queued
 
 
@@ -5111,7 +5364,7 @@ def revoke_approved(component_id: int, principal: Principal = Depends(admin_auth
             if pdef and pdef['active']:
                 if pdef['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator required')
                 conn.execute('UPDATE scoped_policies SET active=0,disabled_at=?,disabled_by=? WHERE id=?',(utcnow(),principal.username,pdef['id']))
-                linked=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(pdef['id'],)).fetchall()
+                linked=scoped_policy_request_targets(conn,pdef['id'])
                 queued=0
                 for link in linked:
                     queued += queue_linked_policy_revocations(conn,link['device_id'],link['request_id'],principal.username,pdef['id'])
@@ -5528,7 +5781,7 @@ def disable_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
         conn.execute('UPDATE scoped_policies SET active=0,disabled_at=?,disabled_by=? WHERE id=?',(utcnow(),principal.username,policy_id))
 
         if p['action']=='allow':
-            rows=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(policy_id,)).fetchall()
+            rows=scoped_policy_request_targets(conn,policy_id)
             queued=0
             for r in rows:
                 queued += queue_linked_policy_revocations(conn,r['device_id'],r['request_id'],principal.username,policy_id)
@@ -5575,7 +5828,7 @@ def delete_policy(policy_id:int, principal:Principal=Depends(admin_auth)):
         if p['organization_id'] is not None: require_org_access(principal,p['organization_id'])
         cleanup=policy_cleanup_counts(conn,policy_id)
         if p['action']=='allow' and cleanup['allow_layers'] and not cleanup['commands'] and not cleanup['failed_commands']:
-            rows=conn.execute("SELECT DISTINCT device_id,request_id FROM approved_components WHERE policy_definition_id=? AND status IN ('approved','blocked','revoking') AND request_id IS NOT NULL",(policy_id,)).fetchall()
+            rows=scoped_policy_request_targets(conn,policy_id)
             for row in rows:
                 queue_linked_policy_revocations(conn,row['device_id'],row['request_id'],principal.username,policy_id)
         elif p['action']=='block' and cleanup['block_layers'] and not cleanup['commands'] and not cleanup['failed_commands']:

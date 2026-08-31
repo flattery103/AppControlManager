@@ -25,9 +25,6 @@ public static class WorkerPolicyValidator
         ArgumentNullException.ThrowIfNull(expected);
         var document = LoadPolicy(path);
         RemovePageHashRules(document);
-        if (string.Equals(operation, "product", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(operation, "primary_allow", StringComparison.OrdinalIgnoreCase))
-            RemoveUnmatchedPublisherSigners(document, expected);
         var validatedRuleMode = ValidateOperationSemantics(operation, document, expected);
 
         var temp = path + ".validated." + Guid.NewGuid().ToString("N");
@@ -89,34 +86,6 @@ public static class WorkerPolicyValidator
     private static bool IsPageHashName(string? value)
         => value?.EndsWith(" Hash Page Sha1", StringComparison.OrdinalIgnoreCase) == true ||
            value?.EndsWith(" Hash Page Sha256", StringComparison.OrdinalIgnoreCase) == true;
-
-    private static void RemoveUnmatchedPublisherSigners(XDocument document, WorkerPolicyInputIdentity expected)
-    {
-        XNamespace ns = "urn:schemas-microsoft-com:sipolicy";
-        var removedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var signer in document.Descendants(ns + "Signer").ToArray())
-        {
-            var id = signer.Attribute("ID")?.Value;
-            var roots = signer.Descendants(ns + "CertRoot").ToArray();
-            var publishers = signer.Descendants(ns + "CertPublisher").ToArray();
-            var matches = !string.IsNullOrWhiteSpace(id) && roots.Length > 0 && publishers.Length > 0 &&
-                roots.All(x => x.Attribute("Type")?.Value.Equals("TBS", StringComparison.OrdinalIgnoreCase) == true &&
-                               expected.SignerTbsHashes.Contains(x.Attribute("Value")?.Value ?? "")) &&
-                publishers.All(x => expected.PublisherNames.Contains(x.Attribute("Value")?.Value ?? ""));
-            if (matches) continue;
-            if (!string.IsNullOrWhiteSpace(id)) removedIds.Add(id);
-            signer.Remove();
-        }
-        foreach (var reference in document.Descendants()
-                     .Where(x => x.Name == ns + "AllowedSigner" || x.Name == ns + "CiSigner")
-                     .Where(x => removedIds.Contains(x.Attribute("SignerId")?.Value ?? "")).ToArray())
-            reference.Remove();
-        var referencedAttributes = new HashSet<string>(
-            document.Descendants(ns + "FileAttribRef").Select(x => x.Attribute("RuleID")?.Value)
-                .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!), StringComparer.OrdinalIgnoreCase);
-        foreach (var attribute in document.Descendants(ns + "FileAttrib").ToArray())
-            if (!referencedAttributes.Contains(attribute.Attribute("ID")?.Value ?? "")) attribute.Remove();
-    }
 
     private static string ValidateOperationSemantics(
         string operation,
@@ -249,9 +218,62 @@ public static class WorkerPolicyValidator
         var filePublisherMode = ruleMode.Equals("filepublisher", StringComparison.OrdinalIgnoreCase);
         if (!productMode && !filePublisherMode)
             throw new InvalidDataException($"{(deny ? "Deny" : "Allow")} generation returned an unexpected rule mode.");
+        signerReferences = RemoveUnvalidatedCompanionSigners(
+            signerReferences, document, ns, expected);
         if (hashRules.Length != 0 || signerReferences.Length == 0 || fileAttributes.Length == 0 ||
             !AllSignerRulesMatchExpectedInput(signerReferences, fileAttributes, document, ns, expected, productMode))
             throw new InvalidDataException($"FilePublisher {(deny ? "deny" : "allow")} generation did not match the staged input.");
+    }
+
+    private static XElement[] RemoveUnvalidatedCompanionSigners(
+        XElement[] signerReferences,
+        XDocument document,
+        XNamespace ns,
+        WorkerPolicyInputIdentity expected)
+    {
+        var referencedIds = new HashSet<string>(
+            signerReferences
+                .Select(reference => reference.Attribute("SignerId")?.Value)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value!),
+            StringComparer.OrdinalIgnoreCase);
+        var validatedSignerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var signer in document.Descendants(ns + "Signer").ToArray())
+        {
+            var signerId = signer.Attribute("ID")?.Value;
+            var roots = signer.Descendants(ns + "CertRoot").ToArray();
+            var publishers = signer.Descendants(ns + "CertPublisher").ToArray();
+            var validatesStagedSigner = !string.IsNullOrWhiteSpace(signerId) &&
+                referencedIds.Contains(signerId) &&
+                roots.Length > 0 && publishers.Length > 0 &&
+                roots.All(root =>
+                    root.Attribute("Type")?.Value.Equals("TBS", StringComparison.OrdinalIgnoreCase) == true &&
+                    expected.SignerTbsHashes.Contains(root.Attribute("Value")?.Value ?? "")) &&
+                publishers.All(publisher =>
+                    expected.PublisherNames.Contains(publisher.Attribute("Value")?.Value ?? ""));
+            if (validatesStagedSigner)
+            {
+                validatedSignerIds.Add(signerId!);
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(signerId))
+            {
+                foreach (var signerReference in document.Descendants()
+                             .Where(element =>
+                                 element.Attribute("SignerId")?.Value.Equals(
+                                     signerId, StringComparison.OrdinalIgnoreCase) == true)
+                             .ToArray())
+                    signerReference.Remove();
+            }
+            signer.Remove();
+        }
+
+        return signerReferences
+            .Where(reference => reference.Parent is not null &&
+                validatedSignerIds.Contains(reference.Attribute("SignerId")?.Value ?? ""))
+            .ToArray();
     }
 
     private static bool AllHashRulesMatchExpectedInput(

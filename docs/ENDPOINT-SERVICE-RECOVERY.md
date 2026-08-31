@@ -1,4 +1,4 @@
-# AppControl Manager 1.0.0-rc.11 Endpoint Service Recovery
+# AppControl Manager 1.0.0-rc.12 Endpoint Service Recovery
 
 Use this procedure when an enrolled Windows device is Offline and either `AppControlManager` or `AppControlManagerRuleWorker` is stopped. Run it in Windows PowerShell as Administrator. Do not queue another agent update until both services are running and the endpoint has sent a new heartbeat.
 

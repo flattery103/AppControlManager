@@ -1,0 +1,11 @@
+AppControl Manager 1.0.0-rc.12
+
+- Automatically refreshes the dashboard Pending Requests section every 10 seconds without discarding retained request history.
+- Shows a tenant-scoped new approval notification on every administrative page until that user views or dismisses it.
+- Retains per-request acknowledgement records, so organization reassignment cannot hide an older pending request.
+- Limits the device summary to the 25 newest activity entries and adds a paginated View all activity page.
+- Revoking an application approval now removes every directly related primary and background supplemental policy layer on that device.
+- Direct relationship checks require compatible publisher identity and do not expand transitively through unrelated component paths.
+- Disabling a broader organization or global approval continues cleanup across every affected device.
+- Normalizes cross-signed FilePublisher output by removing unvalidated companion signers while retaining the exact staged-file signer.
+- Preserves RC10 duplicate activation, isolated staging, rollback protection, Windows services repair, and documented endpoint recovery.
