@@ -124,6 +124,8 @@ class Release0180RuleWorkerTests(unittest.TestCase):
             self.assertIn(mutation, behavior)
         self.assertIn("exact hash identity", behavior)
         self.assertIn("exact ProductName and signer identity", behavior)
+        self.assertIn("unexpected additional signer was not removed safely", behavior)
+        self.assertIn("RemoveUnmatchedPublisherSigners", core_validator)
         self.assertIn("exact FilePublisher file/version and signer identity", behavior)
         self.assertIn("final handle path is not bound", snapshot_behavior)
         self.assertIn("reparse-point output is followed", snapshot_behavior)

@@ -1,0 +1,7 @@
+AppControl Manager 1.0.0-rc.11
+
+- Safely removes unrelated extra ConfigCI signer paths while retaining and validating the staged file's exact publisher authorization.
+- Resolves the Json.NET dual-signer background failure that prevented Learning mode from transitioning to Enforcement.
+- Cancels a stale older installing-history latch after the endpoint reports a newer installed agent version.
+- Limits the device Activity / History summary to 25 entries and adds a paginated View All Activity page without deleting underlying history.
+- Keeps descriptive update-stage health badges on the device detail page.

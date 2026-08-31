@@ -26,6 +26,7 @@ internal static class WorkerPolicyValidationBehavior
         Accepts("exact hash identity", ExactHashPolicy, "primary_allow", "hash");
         RemovesUntrustedPageHashes();
         Accepts("exact ProductName and signer identity", ExactProductPolicy, "primary_allow", "product");
+        AcceptsAndRemovesUnexpectedSigner();
         Accepts("exact SHA-384 ProductName signer identity", ExactSha384ProductPolicy, "product", "product");
         Accepts("exact FilePublisher file/version and signer identity", ExactFilePublisherPolicy, "primary_allow", "filepublisher");
         Accepts("exact deny hash identity", ExactDenyHashPolicy, "deny_policy", "hash");
@@ -74,6 +75,21 @@ internal static class WorkerPolicyValidationBehavior
             WorkerPolicyValidator.ValidateAndNormalizeFile(path, "primary_allow", Expected);
             if (File.ReadAllText(path).Contains("Hash Page", StringComparison.Ordinal))
                 throw new InvalidOperationException("mutation: unvalidated page hash remains publishable");
+        }
+        finally { File.Delete(path); }
+    }
+
+    private static void AcceptsAndRemovesUnexpectedSigner()
+    {
+        var path = WriteFixture(ProductPolicyWithUnexpectedAdditionalSigner);
+        try
+        {
+            var mode = WorkerPolicyValidator.ValidateAndNormalizeFile(path, "product", Expected);
+            var normalized = File.ReadAllText(path);
+            if (!mode.Equals("product", StringComparison.OrdinalIgnoreCase) ||
+                !normalized.Contains("ID_SIGNER_CONTOSO", StringComparison.Ordinal) ||
+                normalized.Contains("ID_SIGNER_MICROSOFT", StringComparison.Ordinal))
+                throw new InvalidOperationException("unexpected additional signer was not removed safely");
         }
         finally { File.Delete(path); }
     }
@@ -143,6 +159,21 @@ internal static class WorkerPolicyValidationBehavior
           <Signers><Signer ID="ID_SIGNER_CONTOSO"><CertRoot Type="TBS" Value="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"/><CertPublisher Value="Contoso Software"/><FileAttribRef RuleID="ID_FILEATTRIB_PRODUCT"/></Signer></Signers>
           <SigningScenarios><SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_WINDOWS"><ProductSigners><AllowedSigners><AllowedSigner SignerId="ID_SIGNER_CONTOSO"/></AllowedSigners></ProductSigners></SigningScenario></SigningScenarios>
           <UpdatePolicySigners/><CiSigners><CiSigner SignerId="ID_SIGNER_CONTOSO"/></CiSigners><HvciOptions>0</HvciOptions>
+        </SiPolicy>
+        """;
+
+    private const string ProductPolicyWithUnexpectedAdditionalSigner = """
+        <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy" PolicyType="Base Policy">
+          <VersionEx>10.0.0.0</VersionEx><BasePolicyID>{22222222-2222-2222-2222-222222222222}</BasePolicyID><PolicyID>{22222222-2222-2222-2222-222222222222}</PolicyID>
+          <PlatformID>{2E07F7E4-194C-4D20-B7C9-6F44A6C5A234}</PlatformID>
+          <Rules><Rule><Option>Enabled:UMCI</Option></Rule><Rule><Option>Enabled:Audit Mode</Option></Rule><Rule><Option>Enabled:Unsigned System Integrity Policy</Option></Rule><Rule><Option>Enabled:Advanced Boot Options Menu</Option></Rule></Rules>
+          <EKUs/><FileRules><FileAttrib ID="ID_FILEATTRIB_PRODUCT" ProductName="Contoso App" MinimumFileVersion="1.2.3.4"/></FileRules>
+          <Signers>
+            <Signer ID="ID_SIGNER_CONTOSO"><CertRoot Type="TBS" Value="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"/><CertPublisher Value="Contoso Software"/><FileAttribRef RuleID="ID_FILEATTRIB_PRODUCT"/></Signer>
+            <Signer ID="ID_SIGNER_MICROSOFT"><CertRoot Type="TBS" Value="FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"/><CertPublisher Value="Microsoft 3rd Party Application Component"/><FileAttribRef RuleID="ID_FILEATTRIB_PRODUCT"/></Signer>
+          </Signers>
+          <SigningScenarios><SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_WINDOWS"><ProductSigners><AllowedSigners><AllowedSigner SignerId="ID_SIGNER_CONTOSO"/><AllowedSigner SignerId="ID_SIGNER_MICROSOFT"/></AllowedSigners></ProductSigners></SigningScenario></SigningScenarios>
+          <UpdatePolicySigners/><CiSigners><CiSigner SignerId="ID_SIGNER_CONTOSO"/><CiSigner SignerId="ID_SIGNER_MICROSOFT"/></CiSigners><HvciOptions>0</HvciOptions>
         </SiPolicy>
         """;
 

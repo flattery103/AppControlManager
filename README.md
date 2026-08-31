@@ -1,8 +1,8 @@
-# AppControl Manager 1.0.0-rc.10
+# AppControl Manager 1.0.0-rc.11
 
-## 1.0.0 Release Candidate 10
+## 1.0.0 Release Candidate 11
 
-Version 1.0.0-rc.10 hardens managed updates after the RC8 duplicate-activation failure. The server keeps an installing release latched until the endpoint reports a terminal result, every command uses isolated staging, prerelease versions are safe during rollback, and failed rollback paths make a final attempt to restore both Windows services. The production endpoint service recovery process is documented in `docs/ENDPOINT-SERVICE-RECOVERY.md`.
+Version 1.0.0-rc.11 safely normalizes multi-signer ConfigCI output so legitimate dual-signed files such as Json.NET no longer strand Learning mode, while unmatched signers remain excluded. It also reconciles stale older update activations and limits device activity summaries to 25 entries with a paginated full-history view.
 
 This is a release-candidate build published as the GitHub Latest release for server-update discovery. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
@@ -89,7 +89,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.10`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.11`:
 
 ```text
 AZURE_CLIENT_ID

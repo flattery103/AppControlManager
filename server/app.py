@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.10")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.11")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -1269,6 +1269,16 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
             "UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status='installing'",
             (utcnow(),device_id,current),
         )
+        stale_activations=conn.execute(
+            "SELECT id,target_version FROM agent_update_history WHERE device_id=? AND status='installing' AND target_version<>?",
+            (device_id,current),
+        ).fetchall()
+        for stale in stale_activations:
+            if version_at_least(current,stale['target_version']):
+                conn.execute(
+                    "UPDATE agent_update_history SET status='canceled',completed_at=?,detail=? WHERE id=?",
+                    (utcnow(),f"Superseded after endpoint reported newer installed version {current}.",stale['id']),
+                )
     if current==desired:
         conn.execute("UPDATE devices SET desired_agent_version=?,update_status='current',update_result=NULL,last_update_at=COALESCE(last_update_at,?) WHERE id=?",(desired,utcnow(),device_id))
         conn.execute("UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status IN ('queued','installing')",(utcnow(),device_id,desired))
@@ -1731,7 +1741,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.10</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.11</div></aside>"
     )
 
 
@@ -2129,7 +2139,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.10"}
+    return {"ok": True, "version": "1.0.0-rc.11"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -3720,6 +3730,19 @@ def request_detail(request_id:int, principal:Principal=Depends(admin_auth)):
     return page(f'Approval Request #{request_id}',body,principal,subtitle='Request details, decision history and captured application components.',actions="<a class='button' href='/requests'>Back to Requests</a><a class='button' href='/reports/approvals'>Decision Report</a>")
 
 
+def device_activity_rows(conn:sqlite3.Connection, device_id:str, limit:int, offset:int=0):
+    return conn.execute("""
+        SELECT activity_time,activity,detail,source_order,source_id FROM (
+          SELECT COALESCE(occurred_at,received_at) activity_time,
+                 CASE event_id WHEN 3077 THEN 'Blocked by App Control' WHEN 3076 THEN 'Observed / Audit' ELSE 'Event ' || event_id END activity,
+                 COALESCE(product_name,file_path,'') detail,1 source_order,id source_id FROM events WHERE device_id=?
+          UNION ALL SELECT created_at,'Approval request ' || status,COALESCE(product_name,file_path,''),2,id FROM approval_requests WHERE device_id=?
+          UNION ALL SELECT created_at,'Command ' || command_type || ' / ' || status,COALESCE(result,''),3,id FROM commands WHERE device_id=?
+          UNION ALL SELECT occurred_at,action,COALESCE(detail,''),4,id FROM audit_log WHERE device_id=?
+        ) ORDER BY activity_time DESC,source_order DESC,source_id DESC LIMIT ? OFFSET ?
+    """,(device_id,device_id,device_id,device_id,limit,offset)).fetchall()
+
+
 @app.get('/devices/{device_id}', response_class=HTMLResponse)
 def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     with db() as conn:
@@ -3730,10 +3753,9 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         approvals=conn.execute("SELECT * FROM approved_components WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         blocks=conn.execute("SELECT * FROM blocked_applications WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         requests=conn.execute("SELECT * FROM approval_requests WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
-        events=conn.execute("SELECT * FROM events WHERE device_id=? ORDER BY id DESC LIMIT 150",(device_id,)).fetchall()
         commands=conn.execute("SELECT * FROM commands WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
         command_busy=any(c['status'] in {'pending','processing'} for c in commands)
-        audits=conn.execute("SELECT * FROM audit_log WHERE device_id=? ORDER BY id DESC LIMIT 100",(device_id,)).fetchall()
+        timeline=device_activity_rows(conn,device_id,25)
         _expire_installation_approvals(conn,device_id)
         installation=conn.execute("SELECT * FROM installation_requests WHERE device_id=? ORDER BY id DESC LIMIT 1",(device_id,)).fetchone()
         effective=[r for r in conn.execute("SELECT * FROM scoped_policies WHERE active=1 ORDER BY CASE action WHEN 'block' THEN 0 ELSE 1 END,id DESC").fetchall() if device_matches_policy_scope(conn,device_id,r)]
@@ -3741,12 +3763,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
         for r in effective:
             cls='badge-bad' if r['action']=='block' else 'badge-ok'
             pol_rows.append(f"<tr><td><span class='badge {cls}'>{escape(r['action'].upper())}</span></td><td>{escape(r['name'])}</td><td>{escape(policy_scope_label(conn,r))}</td><td>{escape(r['publisher'] or '')}</td><td>{escape(r['product_name'] or '')}</td></tr>")
-    timeline=[]
-    for e in events[:80]: timeline.append((e['occurred_at'] or e['received_at'], 'Blocked by App Control' if e['event_id']==3077 else ('Observed / Audit' if e['event_id']==3076 else 'Event '+str(e['event_id'])), e['product_name'] or e['file_path'] or ''))
-    for r in requests[:50]: timeline.append((r['created_at'],'Approval request '+r['status'],r['product_name'] or r['file_path']))
-    for c in commands[:50]: timeline.append((c['created_at'],'Command '+c['command_type']+' / '+c['status'],c['result'] or ''))
-    for a in audits[:50]: timeline.append((a['occurred_at'],a['action'],a['detail'] or ''))
-    timeline=sorted(timeline,key=lambda x:x[0] or '',reverse=True)[:150]
+    timeline=sorted(timeline,key=lambda x:x[0] or '',reverse=True)[:25]
     group_form=''
     if principal.can_manage_org:
         opts="<option value=''>No group</option>"+''.join(f"<option value='{g['id']}' {'selected' if d['group_id']==g['id'] else ''}>{escape(g['name'])}</option>" for g in groups)
@@ -3754,7 +3771,7 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     appr=''.join(f"<tr><td>{escape(a['product_name'] or '')}</td><td><code>{escape(a['file_path'])}</code></td><td>{escape(a['rule_type'] or '')}</td><td>{escape(a['status'] or '')}</td><td>{escape(display_time(a['approved_at']))}</td></tr>" for a in approvals)
     blk=''.join(f"<tr><td>{escape(b['product_name'] or '')}</td><td><code>{escape(b['file_path'])}</code></td><td>{escape(b['status'])}</td><td>{escape(display_time(b['blocked_at'] or b['created_at']))}</td></tr>" for b in blocks)
     reqs=''.join(f"<tr><td><a href='/requests/{r['id']}'>{r['id']}</a></td><td>{escape(r['product_name'] or '')}</td><td>{escape(r['status'])}</td><td>{escape(r['requested_by'] or '')}</td><td>{escape(display_time(r['created_at']))}</td></tr>" for r in requests)
-    hist=''.join(f"<tr><td>{escape(display_time(t))}</td><td>{escape(k)}</td><td><code>{escape(v or '')}</code></td></tr>" for t,k,v in timeline)
+    hist=''.join(f"<tr><td>{escape(display_time(row['activity_time']))}</td><td>{escape(row['activity'])}</td><td><code>{escape(row['detail'] or '')}</code></td></tr>" for row in timeline)
     policies=''.join(pol_rows)
     with db() as conn:
         active_releases=conn.execute("SELECT * FROM agent_releases WHERE active=1 AND deleted_at IS NULL ORDER BY id DESC").fetchall()
@@ -3829,13 +3846,27 @@ def device_detail(device_id:str, principal:Principal=Depends(admin_auth)):
     body=f"""<div class='grid'><div class='stat'><span class='stat-label'>Organization</span><b style='font-size:18px'>{escape(d['organization_name'] or '')}</b></div><div class='stat'><span class='stat-label'>Device Group</span><b style='font-size:18px'>{escape(d['group_name'] or 'None')}</b></div><div class='stat'><span class='stat-label'>App Control Mode</span><b style='font-size:18px'>{escape(mode_name)}</b></div><div class='stat'><span class='stat-label'>Agent Version</span><b style='font-size:18px'>{escape(d['agent_version'] or '')}</b></div></div>
 {jump}{control_panel}{background_panel}
 <div id='policies' class='section-head'><h2>Effective Scoped Policies</h2><a href='/reports/policies?device_id={quote(device_id)}'>Device Policy Report →</a></div><div class='card'><table><tr><th>Action</th><th>Application</th><th>Scope</th><th>Publisher</th><th>Product</th></tr>{policies or '<tr><td colspan=5><div class=empty>No active scoped policies apply to this device.</div></td></tr>'}</table></div>
-<div id='activity' class='section-head'><h2>Activity / History</h2><a href='/reports/blocked-events?device_id={quote(device_id)}'>Blocked Event Report →</a></div><div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{hist or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>
+<div id='activity' class='section-head'><h2>Activity / History</h2><div class='actions'><a href='/devices/{device_id}/activity'>View All Activity →</a><a href='/reports/blocked-events?device_id={quote(device_id)}'>Blocked Event Report →</a></div></div><div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{hist or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>
 <div id='approved-apps' class='section-head'><h2>Approved Applications</h2></div><div class='card'><table><tr><th>Product</th><th>File</th><th>Rule</th><th>Status</th><th>Approved</th></tr>{appr or '<tr><td colspan=5><div class=empty>No approvals.</div></td></tr>'}</table></div>
 <div id='blocked-apps' class='section-head'><h2>Blocked Applications</h2></div><div class='card'><table><tr><th>Product</th><th>File</th><th>Status</th><th>Blocked</th></tr>{blk or '<tr><td colspan=4><div class=empty>No explicit blocks.</div></td></tr>'}</table></div>
 <div id='requests' class='section-head'><h2>Approval Requests</h2><a href='/reports/approvals?device_id={quote(device_id)}'>Decision Report →</a></div><div class='card'><table><tr><th>ID</th><th>Product</th><th>Status</th><th>User</th><th>Created</th></tr>{reqs or '<tr><td colspan=5><div class=empty>No requests.</div></td></tr>'}</table></div>"""
     report_actions_html=f"<a class='button' href='/reports/device-compliance?device_id={quote(device_id)}'>Device Report</a><a class='button' href='/reports/device-compliance.csv?device_id={quote(device_id)}'>Export CSV</a>"
     subtitle=f"{d['organization_name'] or ''} · {d['group_name'] or 'No group'} · {mode_name}"
     return page(d['hostname'],body+update_panel+lifecycle_panel,principal,subtitle=subtitle,actions=report_actions_html)
+
+
+@app.get('/devices/{device_id}/activity', response_class=HTMLResponse)
+def device_activity(device_id:str, page_num:int=Query(1,alias='page'), principal:Principal=Depends(admin_auth)):
+    page_num=max(1,page_num); page_size=50; offset=(page_num-1)*page_size
+    with db() as conn:
+        device=conn.execute("SELECT * FROM devices WHERE id=?",(device_id,)).fetchone()
+        if not device: raise HTTPException(status_code=404,detail='Device not found')
+        require_org_access(principal,device['organization_id'])
+        total=sum(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE device_id=?",(device_id,)).fetchone()[0] for table in ('events','approval_requests','commands','audit_log'))
+        rows=device_activity_rows(conn,device_id,page_size,offset)
+    html=''.join(f"<tr><td>{escape(display_time(r['activity_time']))}</td><td>{escape(r['activity'])}</td><td><code>{escape(r['detail'] or '')}</code></td></tr>" for r in rows)
+    table=f"<div class='card'><table><tr><th>Time</th><th>Activity</th><th>Detail</th></tr>{html or '<tr><td colspan=3><div class=empty>No activity.</div></td></tr>'}</table></div>"
+    return page(f"{device['hostname']} Activity",table+pager(f'/devices/{device_id}/activity',page_num,total,{}),principal,subtitle=f'Complete retained device activity · {total} entries',actions=f"<a class='button' href='/devices/{device_id}'>Back to Device</a>")
 
 
 
