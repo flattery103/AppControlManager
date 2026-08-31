@@ -6,12 +6,14 @@ $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AppControlManager-Rele
 $assets = Join-Path $testRoot 'release'
 $calls = Join-Path $testRoot 'calls.txt'
 $fakeGh = Join-Path $testRoot 'gh.cmd'
+$notes = Join-Path $testRoot 'release-notes.txt'
 
 try {
     New-Item -ItemType Directory -Path $assets -Force | Out-Null
     1..6 | ForEach-Object {
         Set-Content -LiteralPath (Join-Path $assets ("asset{0}.txt" -f $_)) -Value "asset $_" -Encoding ascii
     }
+    Set-Content -LiteralPath $notes -Value 'Test release notes.' -Encoding ascii
 
     @'
 @echo off
@@ -26,14 +28,14 @@ exit /b 0
 
     $env:CALLS = $calls
     $env:PROBE_EXIT = '1'
-    & $publisher -Tag 'v0.18.0' -Version '0.18.0' -AssetsDirectory $assets -GhCommand $fakeGh
+    & $publisher -Tag 'v0.18.0' -Version '0.18.0' -AssetsDirectory $assets -NotesFile $notes -GhCommand $fakeGh
     if (-not (Select-String -LiteralPath $calls -SimpleMatch 'release create v0.18.0')) {
         throw 'Missing release was not created.'
     }
 
     Remove-Item -LiteralPath $calls -Force
     $env:PROBE_EXIT = '1'
-    & $publisher -Tag 'v1.0.0-rc.1' -Version '1.0.0-rc.1' -AssetsDirectory $assets -GhCommand $fakeGh
+    & $publisher -Tag 'v1.0.0-rc.1' -Version '1.0.0-rc.1' -AssetsDirectory $assets -NotesFile $notes -GhCommand $fakeGh
     $rcCreate = Get-Content -LiteralPath $calls | Where-Object { $_ -like 'release create*' } | Select-Object -Last 1
     if ($rcCreate -notlike 'release create v1.0.0-rc.1*') {
         throw 'Missing RC release creation invocation.'
@@ -49,7 +51,7 @@ exit /b 0
     $env:PROBE_EXIT = '2'
     $threw = $false
     try {
-        & $publisher -Tag 'v0.18.0' -Version '0.18.0' -AssetsDirectory $assets -GhCommand $fakeGh
+        & $publisher -Tag 'v0.18.0' -Version '0.18.0' -AssetsDirectory $assets -NotesFile $notes -GhCommand $fakeGh
     }
     catch {
         $threw = $true

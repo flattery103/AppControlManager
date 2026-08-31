@@ -1,0 +1,7 @@
+AppControl Manager 1.0.0 Production Release
+
+Version 1.0.0 is the production promotion of the fully tested RC13 build. There are no functional changes between RC13 and 1.0.0.
+
+The release retains RC13 crash recovery for both Windows services, the validated reboot-continuation test, live request notifications, complete approval revocation, activity pagination, background FilePublisher validation, managed updates, and endpoint cleanup behavior.
+
+Windows executables and the installer must be built and signed by the v1.0.0 tag workflow. Publish the release as the stable GitHub Latest release, not as a prerelease.

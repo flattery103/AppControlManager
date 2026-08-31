@@ -61,6 +61,28 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("$global:LASTEXITCODE = 0", expected_failure)
         self.assertIn("GitHub Release publication probe tests passed", expected_failure)
 
+    def test_release_publisher_uses_production_notes_for_create_and_edit(self):
+        text = (ROOT / ".github" / "scripts" / "Publish-GitHubRelease.ps1").read_text(encoding="utf-8")
+        self.assertIn('$Version-RELEASE.txt', text)
+        self.assertEqual(text.count("--notes-file"), 2)
+        self.assertNotIn("--generate-notes", text)
+
+    def test_install_and_upgrade_remove_only_superseded_rc13_validators(self):
+        obsolete = (
+            "Test-AppControlManagerEndpoint-RC13-v1.ps1",
+            "Test-AppControlManagerRecovery-RC13-v1.ps1",
+        )
+        for relative in (
+            "windows-agent/Install-Agent.ps1",
+            "windows-agent/Upgrade-Agent.ps1",
+            "windows-agent/scripts/Apply-AgentUpdate.ps1",
+            "windows-agent/src/AppControlManager.Installer/Program.cs",
+        ):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            for filename in obsolete:
+                self.assertIn(filename, text, relative)
+            self.assertTrue("Remove-Item" in text or "File.Delete" in text, relative)
+
     def test_windows_ci_uses_node24_generation_actions(self):
         text = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
         self.assertIn("actions/checkout@v6", text)

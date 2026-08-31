@@ -7,7 +7,7 @@ SCRIPT = (
     ROOT
     / "windows-agent"
     / "scripts"
-    / "Test-AppControlManagerEndpoint-RC13-v1.ps1"
+    / "Test-AppControlManagerEndpoint-1.0-v1.ps1"
 )
 
 
@@ -18,7 +18,7 @@ class EndpointValidationScriptTests(unittest.TestCase):
 
     def test_exposes_safe_health_and_functional_modes(self):
         text = self.script_text()
-        self.assertIn("$validatorVersion = 'RC13-v1'", text)
+        self.assertIn("$validatorVersion = '1.0-v1'", text)
         self.assertIn('endpoint validation $validatorVersion ($Mode)', text)
         self.assertIn("[ValidateSet('Health', 'Functional')]", text)
         self.assertIn("[string]$Mode = 'Health'", text)
@@ -84,7 +84,7 @@ class EndpointValidationScriptTests(unittest.TestCase):
             ROOT / "docs" / "ENDPOINT-VALIDATION.md"
         ).read_text(encoding="utf-8")
         self.assertIn("Windows PowerShell as Administrator", text)
-        self.assertIn("Test-AppControlManagerEndpoint-RC13-v1.ps1", text)
+        self.assertIn("Test-AppControlManagerEndpoint-1.0-v1.ps1", text)
         self.assertIn("-Mode Health", text)
         self.assertIn("-Mode Functional", text)
         self.assertIn("-OutputPath", text)

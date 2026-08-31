@@ -3,10 +3,10 @@
 Disruptive recovery validation for an AppControl Manager disposable test VM.
 
 .EXAMPLE
-.\Test-AppControlManagerRecovery-RC13-v1.ps1 -Mode Recovery -OutputPath C:\Temp\ACM-Recovery-RC13-v1.json
+.\Test-AppControlManagerRecovery-1.0-v1.ps1 -Mode Recovery -OutputPath C:\Temp\ACM-Recovery-1.0-v1.json
 
 .EXAMPLE
-.\Test-AppControlManagerRecovery-RC13-v1.ps1 -Mode CrashRecovery -IncludeReboot -OutputPath C:\Temp\ACM-CrashRecovery-RC13-v1.json
+.\Test-AppControlManagerRecovery-1.0-v1.ps1 -Mode CrashRecovery -IncludeReboot -OutputPath C:\Temp\ACM-CrashRecovery-1.0-v1.json
 #>
 [CmdletBinding()]
 param(
@@ -17,7 +17,7 @@ param(
 
     [string]$OutputPath = (
         Join-Path $env:TEMP (
-            'AppControlManager-Recovery-RC13-v1-{0}.json' -f (
+            'AppControlManager-Recovery-1.0-v1-{0}.json' -f (
                 Get-Date -Format 'yyyyMMdd-HHmmss'
             )
         )
@@ -25,13 +25,13 @@ param(
 
     [switch]$ResumeAfterReboot,
 
-    [string]$ContinuationTaskName = 'AppControlManager Recovery Validation RC13-v1',
+    [string]$ContinuationTaskName = 'AppControlManager Recovery Validation 1.0-v1',
 
     [string]$PreRebootReportPath
 )
 
 $ErrorActionPreference = 'Stop'
-$testVersion = 'RC13-v1'
+$testVersion = '1.0-v1'
 $recoveryScriptPath = $PSCommandPath
 $programFiles = 'C:\Program Files\AppControlManager'
 $programData = 'C:\ProgramData\AppControlManager'
@@ -369,15 +369,15 @@ function Test-SafetyGates {
 
 function Invoke-FinalHealthValidation {
     $validatorNames = @(
-        (Join-Path $PSScriptRoot 'Test-AppControlManagerEndpoint-RC13-v1.ps1'),
-        (Join-Path $programFiles 'Scripts\Test-AppControlManagerEndpoint-RC13-v1.ps1')
+        (Join-Path $PSScriptRoot 'Test-AppControlManagerEndpoint-1.0-v1.ps1'),
+        (Join-Path $programFiles 'Scripts\Test-AppControlManagerEndpoint-1.0-v1.ps1')
     )
     $validator = $validatorNames | Where-Object {
         Test-Path -LiteralPath $_
     } | Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace([string]$validator)) {
         Add-TestResult -Name 'Final endpoint health validation' -Status FAIL `
-            -Detail 'Test-AppControlManagerEndpoint-RC13-v1.ps1 was not found beside this script or in Program Files.'
+            -Detail 'Test-AppControlManagerEndpoint-1.0-v1.ps1 was not found beside this script or in Program Files.'
         return
     }
     $healthReport = [IO.Path]::ChangeExtension($OutputPath, '.health.json')

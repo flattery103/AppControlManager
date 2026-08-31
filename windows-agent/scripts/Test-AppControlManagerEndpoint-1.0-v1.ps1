@@ -23,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$validatorVersion = 'RC13-v1'
+$validatorVersion = '1.0-v1'
 $programFiles = 'C:\Program Files\AppControlManager'
 $programData = 'C:\ProgramData\AppControlManager'
 $serviceNames = @('AppControlManager', 'AppControlManagerRuleWorker')

@@ -152,6 +152,13 @@ try {
     Start-Sleep -Seconds 2
 
     New-Item -ItemType Directory -Path $programFiles,(Join-Path $programFiles 'Scripts'),$programData -Force | Out-Null
+    foreach($obsoleteValidator in @(
+        'Test-AppControlManagerEndpoint-RC13-v1.ps1',
+        'Test-AppControlManagerRecovery-RC13-v1.ps1'
+    )) {
+        Remove-Item -LiteralPath (Join-Path (Join-Path $programFiles 'Scripts') $obsoleteValidator) -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $programData $obsoleteValidator) -Force -ErrorAction SilentlyContinue
+    }
     Copy-Item -LiteralPath (Join-Path $StagingPath 'Service\AppControlManager.Service.exe') -Destination (Join-Path $programFiles 'AppControlManager.Service.exe') -Force
     Copy-Item -LiteralPath (Join-Path $StagingPath 'Tray\AppControlManager.Tray.exe') -Destination $trayExe -Force
     Copy-Item -Path (Join-Path $StagingPath 'scripts\*.ps1') -Destination (Join-Path $programFiles 'Scripts') -Force

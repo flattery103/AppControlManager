@@ -7,7 +7,7 @@ SCRIPT = (
     ROOT
     / "windows-agent"
     / "scripts"
-    / "Test-AppControlManagerRecovery-RC13-v1.ps1"
+    / "Test-AppControlManagerRecovery-1.0-v1.ps1"
 )
 
 
@@ -18,7 +18,7 @@ class EndpointRecoveryScriptTests(unittest.TestCase):
 
     def test_has_versioned_recovery_and_crash_recovery_modes(self):
         text = self.script_text()
-        self.assertIn("$testVersion = 'RC13-v1'", text)
+        self.assertIn("$testVersion = '1.0-v1'", text)
         self.assertIn("[ValidateSet('Recovery', 'CrashRecovery')]", text)
         self.assertIn("[switch]$IncludeReboot", text)
         self.assertIn("[switch]$ResumeAfterReboot", text)
@@ -70,7 +70,7 @@ class EndpointRecoveryScriptTests(unittest.TestCase):
 
     def test_finishes_with_health_validator_and_json_report(self):
         text = self.script_text()
-        self.assertIn("Test-AppControlManagerEndpoint-RC13-v1.ps1", text)
+        self.assertIn("Test-AppControlManagerEndpoint-1.0-v1.ps1", text)
         self.assertIn("ConvertTo-Json", text)
         self.assertIn("ExitCode", text)
         self.assertIn("$global:LASTEXITCODE", text)
@@ -80,7 +80,7 @@ class EndpointRecoveryScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("disposable test VM", text)
-        self.assertIn("Test-AppControlManagerRecovery-RC13-v1.ps1", text)
+        self.assertIn("Test-AppControlManagerRecovery-1.0-v1.ps1", text)
         self.assertIn("-Mode Recovery", text)
         self.assertIn("-Mode CrashRecovery", text)
         self.assertIn("-IncludeReboot", text)

@@ -12,7 +12,7 @@ internal static class Program
 {
     private static readonly string Version = typeof(Program).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-        .InformationalVersion.Split('+')[0] ?? "1.0.0-rc.13";
+        .InformationalVersion.Split('+')[0] ?? "1.0.0";
 
     [STAThread]
     static void Main(string[] args)
@@ -257,6 +257,15 @@ internal static class Program
         private static void InstallPayloadFiles(string payload)
         {
             PrepareDirectories();
+            foreach(var obsoleteValidator in new[]
+            {
+                "Test-AppControlManagerEndpoint-RC13-v1.ps1",
+                "Test-AppControlManagerRecovery-RC13-v1.ps1"
+            })
+            {
+                File.Delete(Path.Combine(ProgramFilesRoot,"Scripts",obsoleteValidator));
+                File.Delete(Path.Combine(ProgramDataRoot,obsoleteValidator));
+            }
             File.Copy(Path.Combine(payload,"Service","AppControlManager.Service.exe"),Path.Combine(ProgramFilesRoot,"AppControlManager.Service.exe"),true);
             File.Copy(Path.Combine(payload,"Tray","AppControlManager.Tray.exe"),Path.Combine(ProgramFilesRoot,"AppControlManager.Tray.exe"),true);
             foreach(var script in Directory.EnumerateFiles(Path.Combine(payload,"scripts"),"*.ps1"))

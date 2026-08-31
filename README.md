@@ -1,14 +1,14 @@
-# AppControl Manager 1.0.0-rc.13
+# AppControl Manager 1.0.0
 
-## 1.0.0 Release Candidate 13
+## 1.0.0 Production Release
 
-Version 1.0.0-rc.13 configures Windows Service Control Manager crash recovery for both endpoint services. Unexpected termination now triggers restarts after 10, 30, and 60 seconds, while deliberate administrative stops remain stopped. New installation, repair, manual upgrade, managed update, and normal startup all enforce the same configuration, so updating an existing RC12 endpoint repairs it automatically. RC12 live request notifications, complete revocation, activity pagination, and FilePublisher validation remain intact.
+Version 1.0.0 promotes the fully validated RC13 build to production without functional changes. It retains Windows Service Control Manager crash recovery for both endpoint services, including restarts after 10, 30, and 60 seconds following unexpected termination. New installation, repair, manual upgrade, managed update, and normal startup all enforce the same configuration. Live request notifications, complete revocation, activity pagination, and FilePublisher validation remain intact.
 
-Endpoint release validation is installed from `windows-agent/scripts/Test-AppControlManagerEndpoint-RC13-v1.ps1`. The versioned filename and console header prevent stale browser downloads from being mistaken for the current validator. Run its read-only `Health` mode for routine smoke testing or its safe `Functional` mode to restore stopped services and a missing interactive tray before repeating the same checks. See `docs/ENDPOINT-VALIDATION.md` for the normal directions and JSON report format.
+Endpoint release validation is installed from `windows-agent/scripts/Test-AppControlManagerEndpoint-1.0-v1.ps1`. The versioned filename and console header prevent stale browser downloads from being mistaken for the current validator. Run its read-only `Health` mode for routine smoke testing or its safe `Functional` mode to restore stopped services and a missing interactive tray before repeating the same checks. See `docs/ENDPOINT-VALIDATION.md` for the normal directions and JSON report format.
 
-Disruptive recovery validation for a disposable test VM is available in `windows-agent/scripts/Test-AppControlManagerRecovery-RC13-v1.ps1`. It automates controlled service and tray recovery, forced-crash recovery, final endpoint health validation, and one-time post-reboot continuation. CrashRecovery requires `-IncludeReboot` so Windows clears the deliberately consumed SCM failure count. Safety gates prevent the test from starting during agent updates, installation mode, or background policy processing. See `docs/ENDPOINT-RECOVERY-VALIDATION.md`.
+Disruptive recovery validation for a disposable test VM is available in `windows-agent/scripts/Test-AppControlManagerRecovery-1.0-v1.ps1`. It automates controlled service and tray recovery, forced-crash recovery, final endpoint health validation, and one-time post-reboot continuation. CrashRecovery requires `-IncludeReboot` so Windows clears the deliberately consumed SCM failure count. Safety gates prevent the test from starting during agent updates, installation mode, or background policy processing. See `docs/ENDPOINT-RECOVERY-VALIDATION.md`.
 
-This is a release-candidate build published as the GitHub Latest release for server-update discovery. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
+This is the stable production build and must be published as the GitHub Latest release for server-update discovery. The signed Windows artifacts are produced by the tag workflow. Retain a verified server database backup and use the acceptance checklist before broad deployment.
 
 ## 0.18.3 SHA-384 FilePublisher Validation
 
@@ -93,7 +93,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.13`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0`:
 
 ```text
 AZURE_CLIENT_ID

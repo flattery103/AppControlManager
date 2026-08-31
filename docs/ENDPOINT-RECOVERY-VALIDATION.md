@@ -1,8 +1,8 @@
 # AppControl Manager Recovery Validation
 
-`Test-AppControlManagerRecovery-RC13-v1.ps1` automates disruptive service, tray, crash, and optional reboot recovery tests. Run it only on a **disposable test VM** or an endpoint with a current restorable snapshot. Run Windows PowerShell as Administrator while logged into the interactive desktop.
+`Test-AppControlManagerRecovery-1.0-v1.ps1` automates disruptive service, tray, crash, and optional reboot recovery tests. Run it only on a **disposable test VM** or an endpoint with a current restorable snapshot. Run Windows PowerShell as Administrator while logged into the interactive desktop.
 
-Keep `Test-AppControlManagerEndpoint-RC13-v1.ps1` in the same directory. The recovery suite invokes it at the end and saves a separate health report.
+Keep `Test-AppControlManagerEndpoint-1.0-v1.ps1` in the same directory. The recovery suite invokes it at the end and saves a separate health report.
 
 The script refuses to begin when an agent update, installation mode, or queued/processing background-policy operation is active. If a test fails, it makes a final service or tray restoration attempt before exiting.
 
@@ -12,9 +12,9 @@ This mode stops each service normally, restores Automatic startup, starts it, te
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-RC13-v1.ps1" `
+    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-1.0-v1.ps1" `
     -Mode Recovery `
-    -OutputPath C:\Temp\ACM-Recovery-RC13-v1.json
+    -OutputPath C:\Temp\ACM-Recovery-1.0-v1.json
 ```
 
 ## Crash recovery
@@ -25,10 +25,10 @@ CrashRecovery includes the controlled tests, then force-terminates each service 
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-RC13-v1.ps1" `
+    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-1.0-v1.ps1" `
     -Mode CrashRecovery `
     -IncludeReboot `
-    -OutputPath C:\Temp\ACM-CrashRecovery-RC13-v1.json
+    -OutputPath C:\Temp\ACM-CrashRecovery-1.0-v1.json
 ```
 
 ## Reboot continuation
@@ -37,10 +37,10 @@ Add `-IncludeReboot` to either command to register a one-time, highest-privilege
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-RC13-v1.ps1" `
+    -File "$env:USERPROFILE\Downloads\Test-AppControlManagerRecovery-1.0-v1.ps1" `
     -Mode Recovery `
     -IncludeReboot `
-    -OutputPath C:\Temp\ACM-Recovery-Reboot-RC13-v1.json
+    -OutputPath C:\Temp\ACM-Recovery-Reboot-1.0-v1.json
 ```
 
 Do not run these tests during an installation, update, approval, revocation, policy generation, or background-policy operation. The script is intentionally disruptive even though it contains restoration safeguards.

@@ -33,6 +33,13 @@ if(!(Test-Path "$programData\config.json")) {
     @{server_url=$ServerUrl.TrimEnd('/');device_id=$enrolled.device_id;device_key=$enrolled.device_key}|ConvertTo-Json|Set-Content "$programData\config.json" -Encoding UTF8
 }
 
+foreach($obsoleteValidator in @(
+    'Test-AppControlManagerEndpoint-RC13-v1.ps1',
+    'Test-AppControlManagerRecovery-RC13-v1.ps1'
+)) {
+    Remove-Item -LiteralPath (Join-Path "$programFiles\Scripts" $obsoleteValidator) -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $programData $obsoleteValidator) -Force -ErrorAction SilentlyContinue
+}
 Copy-Item "$PSScriptRoot\scripts\*.ps1" "$programFiles\Scripts\" -Force
 Copy-Item "$PSScriptRoot\scripts\*.ps1" "$programData\" -Force
 Copy-Item $serviceExe "$programFiles\AppControlManager.Service.exe" -Force
@@ -55,5 +62,5 @@ do {
 if(-not $worker -or $worker.Status -ne 'Running'){ throw 'AppControl Manager Rule Worker did not start after the main service provisioned it.' }
 New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AppControlManagerTray' -PropertyType String -Value '"C:\Program Files\AppControlManager\AppControlManager.Tray.exe"' -Force | Out-Null
 Start-Process "$programFiles\AppControlManager.Tray.exe" -ErrorAction SilentlyContinue
-Write-Host 'AppControl Manager 1.0.0-rc.13 service and tray installed.' -ForegroundColor Green
+Write-Host 'AppControl Manager 1.0.0 service and tray installed.' -ForegroundColor Green
 Write-Host 'No Windows App Control policy was enabled by this installer.' -ForegroundColor Yellow
