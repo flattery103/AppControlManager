@@ -1,4 +1,4 @@
-# AppControl Manager 1.0.0-rc.8 Learning and Enforcement Guide
+# AppControl Manager 1.0.0-rc.9 Learning and Enforcement Guide
 
 Run learning long enough to cover normal sign-in, maintenance, updates, line-of-business applications, and representative installations. Learning observations are evidence, not automatic permanent trust.
 

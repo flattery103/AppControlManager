@@ -35,7 +35,7 @@ ENROLLMENT_TOKEN = os.getenv("APPCONTROL_ENROLLMENT_TOKEN", os.getenv("APPGUARD_
 ADMIN_USER = os.getenv("APPCONTROL_ADMIN_USER", os.getenv("APPGUARD_ADMIN_USER", "admin"))
 ADMIN_PASSWORD = os.getenv("APPCONTROL_ADMIN_PASSWORD", os.getenv("APPGUARD_ADMIN_PASSWORD", "ChangeMeNow!"))
 
-app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.8")
+app = FastAPI(title="AppControl Manager Server", version="1.0.0-rc.9")
 SESSION_COOKIE = "acm_session"
 SESSION_HOURS = int(os.getenv("APPCONTROL_SESSION_HOURS", "12"))
 COOKIE_SECURE = os.getenv("APPCONTROL_COOKIE_SECURE", "0").strip().lower() in {"1","true","yes","on"}
@@ -1265,6 +1265,12 @@ def refresh_device_update_target(conn: sqlite3.Connection, device_id: str):
     if current==desired:
         conn.execute("UPDATE devices SET desired_agent_version=?,update_status='current',update_result=NULL,last_update_at=COALESCE(last_update_at,?) WHERE id=?",(desired,utcnow(),device_id))
         conn.execute("UPDATE agent_update_history SET status='completed',completed_at=?,detail=COALESCE(detail,'Agent reported target version.') WHERE device_id=? AND target_version=? AND status IN ('queued','installing')",(utcnow(),device_id,desired))
+        # Device-scoped pinned deployments are created by the one-time Update Agent action.
+        # Retire them after success so broader channel deployments can select the next release.
+        if deployment is not None and deployment['scope_type']=='device' and deployment['release_id']:
+            conn.execute("UPDATE agent_deployments SET active=0,status='completed',disabled_at=?,disabled_by='system' WHERE id=?",(utcnow(),deployment['id']))
+            audit(conn,'system','agent_deployment_completed',organization_id=device['organization_id'],device_id=device_id,object_type='agent_deployment',object_id=deployment['id'],detail=f'One-time target {desired} reached; deployment retired.')
+            refresh_device_update_target(conn,device_id)
         return
     conn.execute("UPDATE devices SET desired_agent_version=? WHERE id=?",(desired,device_id))
     # Channel tracking should never silently downgrade a device merely because a newer release was
@@ -1709,7 +1715,7 @@ def nav(principal: Optional[Principal] = None) -> str:
         + _side_section('Applications',apps)
         + _side_section('Activity',activity)
         + (_side_section('Administration',administration) if administration else '')
-        + "</div><div class='side-footer'>Server 1.0.0-rc.8</div></aside>"
+        + "</div><div class='side-footer'>Server 1.0.0-rc.9</div></aside>"
     )
 
 
@@ -2107,7 +2113,7 @@ def mfa_disable(password:str=Form(...), code:str=Form(...), principal:Principal=
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "1.0.0-rc.8"}
+    return {"ok": True, "version": "1.0.0-rc.9"}
 
 
 @app.post("/api/enroll", response_model=EnrollResponse)
@@ -4433,7 +4439,13 @@ def agent_updates_page(principal:Principal=Depends(admin_auth)):
     dr=[]
     with db() as conn:
         for d in deployments:
-            rel=release_for_deployment(conn,d); target=(f"Latest {(d['channel'] or 'stable').title()}" if not d['release_id'] else (rel['version'] if rel else 'Missing release')); scope=deployment_scope_label(conn,d); act=f"<form method='post' action='/admin/agent-deployments/{d['id']}/toggle'><button>{'Pause' if d['active'] else 'Resume'}</button></form>"; dr.append(f"<tr><td><b>{escape(target)}</b></td><td>{escape(scope)}</td><td>{d['rollout_percent']}%</td><td><span class='badge {'badge-ok' if d['active'] else ''}'>{'Active' if d['active'] else 'Paused'}</span></td><td>{display_time(d['created_at'])}</td><td>{act}</td></tr>")
+            rel=release_for_deployment(conn,d); target=(f"Latest {(d['channel'] or 'stable').title()}" if not d['release_id'] else (rel['version'] if rel else 'Missing release')); scope=deployment_scope_label(conn,d)
+            state=(d['status'] or ('active' if d['active'] else 'paused')).lower()
+            actions=[]
+            if state!='completed': actions.append(f"<form method='post' action='/admin/agent-deployments/{d['id']}/toggle'><button>{'Pause' if d['active'] else 'Resume'}</button></form>")
+            if not d['active']: actions.append(f"<form method='post' action='/admin/agent-deployments/{d['id']}/delete' onsubmit=\"return confirm('Delete this automatic update policy? Affected devices will immediately fall back to the next applicable policy.')\"><button class='btn-danger'>Delete</button></form>")
+            status_label='Active' if d['active'] else ('Completed' if state=='completed' else 'Paused')
+            dr.append(f"<tr><td><b>{escape(target)}</b></td><td>{escape(scope)}</td><td>{d['rollout_percent']}%</td><td><span class='badge {'badge-ok' if d['active'] else ''}'>{status_label}</span></td><td>{display_time(d['created_at'])}</td><td><div class='actions'>{''.join(actions)}</div></td></tr>")
     max_ver=max(version_counts.values() or [1]); verbar=''.join(f"<div class='bar-row'><span>{escape(ver)}</span><div class='bar-track'><div class='bar-fill' style='width:{round(n*100/max_ver)}%'></div></div><b>{n}</b></div>" for ver,n in sorted(version_counts.items(),key=lambda x:x[1],reverse=True)[:10])
     summary=f"<div class='grid'><div class='stat'><span class='stat-label'>Managed Devices</span><b>{len(devices)}</b></div><div class='stat'><span class='stat-label'>At Desired Version</span><b>{current}</b></div><div class='stat'><span class='stat-label'>Pending Update</span><b>{pending}</b></div><div class='stat'><span class='stat-label'>Failed / Rolled Back</span><b>{failed}</b></div><div class='stat'><span class='stat-label'>Published Releases</span><b>{len(releases)}</b></div></div>"
     health=f"<div class='grid-2'><div><div class='section-head'><h2>Version Distribution</h2></div><div class='panel'><div class='bar-list'>{verbar or '<div class=empty>No agent version data.</div>'}</div></div></div><div><div class='section-head'><h2>Deployment Model</h2></div><div class='panel'><div class='metric-row'><span>Precedence</span><b>Device → Group → Organization → Global</b></div><div class='metric-row'><span>Stable channel</span><span>Production rollout</span></div><div class='metric-row'><span>Beta channel</span><span>Canary / test devices</span></div><div class='metric-row'><span>Staged rollout</span><span>10% / 25% / 50% / 100%</span></div></div></div></div>"
@@ -4589,11 +4601,31 @@ def toggle_agent_deployment(deployment_id:int,principal:Principal=Depends(admin_
         if not d: raise HTTPException(status_code=404,detail='Deployment not found')
         if d['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator permission required.')
         if d['organization_id']: require_org_access(principal,d['organization_id'])
+        if (d['status'] or '').lower()=='completed': raise HTTPException(status_code=409,detail='Completed one-time update policies cannot be resumed. Delete the policy or issue another manual update.')
         active=0 if d['active'] else 1
         conn.execute('UPDATE agent_deployments SET active=?,status=?,disabled_at=?,disabled_by=? WHERE id=?',(active,'active' if active else 'paused',None if active else utcnow(),None if active else principal.username,deployment_id))
         if not active:
             cancel_pending_agent_updates(conn,deployment_id=deployment_id,reason='Agent deployment was paused before endpoint processing.')
         audit(conn,principal.username,'agent_deployment_toggled',organization_id=d['organization_id'],object_type='agent_deployment',object_id=deployment_id,detail='resumed' if active else 'paused')
+        refresh_all_device_update_targets(conn)
+    return RedirectResponse('/agent-updates',status_code=303)
+
+
+@app.post('/admin/agent-deployments/{deployment_id}/delete')
+def delete_agent_deployment(deployment_id:int,principal:Principal=Depends(admin_auth)):
+    require_org_admin(principal)
+    with db() as conn:
+        deployment=conn.execute('SELECT * FROM agent_deployments WHERE id=?',(deployment_id,)).fetchone()
+        if not deployment: raise HTTPException(status_code=404,detail='Deployment not found')
+        if deployment['scope_type']=='global' and not principal.can_manage_global: raise HTTPException(status_code=403,detail='Global administrator permission required.')
+        if deployment['organization_id']: require_org_access(principal,deployment['organization_id'])
+        if deployment['active']: raise HTTPException(status_code=409,detail='Pause this automatic update policy before deleting it.')
+        active=conn.execute("""SELECT c.id FROM agent_update_history h JOIN commands c ON c.id=h.command_id
+                               WHERE h.deployment_id=? AND c.status IN ('pending','processing') LIMIT 1""",(deployment_id,)).fetchone()
+        if active: raise HTTPException(status_code=409,detail='An endpoint update from this policy is still pending or processing. Wait for it to finish before deleting the policy.')
+        conn.execute('UPDATE agent_update_history SET deployment_id=NULL WHERE deployment_id=?',(deployment_id,))
+        conn.execute('DELETE FROM agent_deployments WHERE id=?',(deployment_id,))
+        audit(conn,principal.username,'agent_deployment_deleted',organization_id=deployment['organization_id'],object_type='agent_deployment',object_id=deployment_id,detail=f"{deployment['scope_type']}:{deployment['scope_id'] or ''}")
         refresh_all_device_update_targets(conn)
     return RedirectResponse('/agent-updates',status_code=303)
 

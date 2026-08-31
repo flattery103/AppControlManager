@@ -75,9 +75,9 @@ class ReleaseCandidatePolicyManagementTests(unittest.TestCase):
             conn.execute("INSERT INTO organizations(id,name,slug,status,created_at) VALUES(704,'Retry Org','retry-org','active',?)", (now,))
             conn.execute("INSERT INTO devices(id,hostname,device_key_hash,agent_version,created_at,organization_id) VALUES('retry-device','RETRY-PC','x','1.0.0-rc.7',?,704)", (now,))
             release_id = conn.execute("""INSERT INTO agent_releases(version,channel,file_name,file_path,sha256,size_bytes,active,created_at,created_by)
-                                         VALUES('1.0.0-rc.8','stable','agent.zip','/tmp/agent.zip',?,1,1,?,'admin')""", ('a' * 64, now)).lastrowid
+                                         VALUES('1.0.0-rc.9','stable','agent.zip','/tmp/agent.zip',?,1,1,?,'admin')""", ('a' * 64, now)).lastrowid
             conn.execute("""INSERT INTO agent_update_history(device_id,release_id,from_version,target_version,status,created_at,completed_at,detail)
-                             VALUES('retry-device',?,'1.0.0-rc.7','1.0.0-rc.8','failed',?,?,?)""", (release_id, now, now, 'disk full'))
+                             VALUES('retry-device',?,'1.0.0-rc.7','1.0.0-rc.9','failed',?,?,?)""", (release_id, now, now, 'disk full'))
             conn.commit()
         principal = app_module.Principal(1, 'admin', 'Admin', 'global_admin', None)
 

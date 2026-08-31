@@ -1,0 +1,8 @@
+AppControl Manager 1.0.0-rc.9
+
+- Adds deletion for paused or completed automatic update deployment policies.
+- Prevents active policies and policies with pending endpoint work from being deleted.
+- Preserves agent update history when an obsolete deployment policy is removed.
+- Automatically retires a successful one-time manual device update assignment.
+- Immediately recalculates affected devices after retirement or deletion so broader Latest Stable policies can take over.
+- Prevents a completed manual update from permanently pinning a device to an old release.

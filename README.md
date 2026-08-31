@@ -1,8 +1,8 @@
-# AppControl Manager 1.0.0-rc.8
+# AppControl Manager 1.0.0-rc.9
 
-## 1.0.0 Release Candidate 8
+## 1.0.0 Release Candidate 9
 
-Version 1.0.0-rc.8 makes revocation, deletion, retry, and endpoint offboarding predictable. Administrators can explicitly deny an application while revoking its supplemental approval, retry already-completed cleanup safely, see precise update activity, and remotely remove all AppControl Manager endpoint state without touching unrelated Windows App Control policies.
+Version 1.0.0-rc.9 fixes automatic-update deployment lifecycle management. Administrators can delete paused or completed deployment policies, and successful one-time device updates now retire automatically so the device immediately returns to its broader Latest Stable, organization, or group policy.
 
 This is a prerelease. Deploy it first to a controlled test group, complete the RC acceptance checklist, and retain a verified server database backup before broader enforcement testing.
 
@@ -89,7 +89,7 @@ Version 0.15.0 combines the planned 0.13.x through 0.15.x work into one feature 
 
 Tagged GitHub Releases are intentionally fail-closed: the Service and Tray executables are built first, signed with Azure Artifact Signing, verified, then packaged into the managed-agent ZIP. The installer is built from that signed payload, signed separately, verified, and only then published with fresh SHA256 files. Ordinary `build-windows.yml` CI artifacts remain unsigned development builds.
 
-Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.8`:
+Configure these GitHub Actions secrets in the `release` environment before creating a signed release tag such as `v1.0.0-rc.9`:
 
 ```text
 AZURE_CLIENT_ID
